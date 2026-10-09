@@ -1,0 +1,1385 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- Launched from the iOS Home Screen, these make it open full screen with no browser chrome. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Paper Shelf">
+<meta name="theme-color" content="#1f7a73">
+<style>
+  :root {
+    color-scheme: light;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<title>Paper Shelf</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zilla+Slab:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+
+<style>
+  /* Layout: full-height app shell — sticky header, scrolling shelf, bottom tab
+     bar; the reader is a full-screen overlay above all of it. */
+  :root {
+    --bg: #e9ebee;
+    --surface: #ffffff;
+    --surface-2: #f2f4f6;
+    --ink: #14181d;
+    --muted: #5c666f;
+    --faint: #98a2aa;
+    --line: #d3d9de;
+    --accent: #1f7a73;
+    --accent-ink: #ffffff;
+    --danger: #a3382d;
+    --shadow: 0 1px 2px rgba(20, 24, 29, .08), 0 8px 24px rgba(20, 24, 29, .06);
+
+    --display: "Zilla Slab", Georgia, "Times New Roman", serif;
+    --sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1216;
+      --surface: #171b21;
+      --surface-2: #1e242b;
+      --ink: #e7ecef;
+      --muted: #98a3ac;
+      --faint: #68727b;
+      --line: #293038;
+      --accent: #37a99f;
+      --accent-ink: #052521;
+      --danger: #df6a5d;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 8px 24px rgba(0, 0, 0, .35);
+      color-scheme: dark;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #0f1216;
+    --surface: #171b21;
+    --surface-2: #1e242b;
+    --ink: #e7ecef;
+    --muted: #98a3ac;
+    --faint: #68727b;
+    --line: #293038;
+    --accent: #37a99f;
+    --accent-ink: #052521;
+    --danger: #df6a5d;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 8px 24px rgba(0, 0, 0, .35);
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.45;
+    -webkit-text-size-adjust: 100%;
+    overscroll-behavior-y: contain;
+  }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+  }
+
+  /* ---------- shell ---------- */
+  #app { display: flex; flex-direction: column; height: 100%; }
+
+  .topbar {
+    position: sticky;
+    top: env(safe-area-inset-top, 0px);
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--line);
+  }
+  .wordmark {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 19px;
+    letter-spacing: -.01em;
+    margin-right: auto;
+  }
+  .wordmark span { color: var(--accent); }
+
+  .iconbtn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px; height: 38px;
+    padding: 0;
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    background: var(--surface);
+  }
+  .iconbtn:hover { border-color: var(--accent); }
+  .iconbtn svg { width: 19px; height: 19px; }
+
+  main { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .wrap { padding: 16px; padding-block: 16px 28px; max-width: 920px; margin: 0 auto; }
+
+  .tabbar {
+    display: flex;
+    gap: 6px;
+    padding: 10px 16px;
+    padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    border-top: 1px solid var(--line);
+    background: var(--surface);
+  }
+  .tabbar button {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    padding: 6px 4px;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 500;
+  }
+  .tabbar button svg { width: 21px; height: 21px; }
+  .tabbar button[aria-selected="true"] { color: var(--accent); background: var(--surface-2); }
+
+  /* ---------- controls ---------- */
+  .searchrow { display: flex; gap: 8px; margin-bottom: 12px; }
+  .field {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 12px;
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    background: var(--surface);
+  }
+  .field svg { width: 17px; height: 17px; color: var(--faint); flex: none; }
+  .field input {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    padding: 10px 0;
+  }
+  .field input:focus { outline: none; }
+
+  .hint { color: var(--muted); font-size: 12px; margin: -4px 0 12px; }
+
+  .chiprow { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+  .chip {
+    padding: 5px 11px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--surface);
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--muted);
+  }
+  .chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+
+  .metarow {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 12px; margin-bottom: 12px;
+    font-size: 12.5px; color: var(--muted);
+  }
+  .linkbtn { border: 0; background: none; padding: 0; color: var(--accent); font-weight: 600; font-size: 12.5px; }
+
+  /* ---------- shelf ---------- */
+  .shelf {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+    gap: 18px 12px;
+  }
+  .vol { display: flex; flex-direction: column; gap: 7px; text-align: left; border: 0; background: none; padding: 0; }
+  .cover {
+    position: relative;
+    aspect-ratio: 2 / 3;
+    width: 100%;
+    max-width: 100%;
+    border-radius: 4px 7px 7px 4px;
+    overflow: hidden;
+    background: var(--surface-2);
+    box-shadow: var(--shadow);
+    /* The spine edge — a volume on a shelf, not a floating card. */
+    border-left: 3px solid color-mix(in srgb, var(--ink) 22%, transparent);
+  }
+  .cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .cover .ph {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+    color: var(--faint); font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+  }
+  .cover .ph svg { width: 24px; height: 24px; }
+  /* Reading progress runs up the spine. */
+  .progress { position: absolute; left: 0; bottom: 0; width: 3px; background: var(--accent); }
+  .queued {
+    position: absolute; top: 6px; right: 6px;
+    width: 20px; height: 20px; border-radius: 999px;
+    background: var(--surface); color: var(--accent);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .queued svg { width: 12px; height: 12px; }
+  .vol .t { font-size: 12.5px; font-weight: 500; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .vol .s { font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+
+  /* ---------- queue ---------- */
+  .queue { display: flex; flex-direction: column; gap: 8px; }
+  .qrow {
+    display: flex; align-items: center; gap: 12px;
+    padding: 9px 11px;
+    border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
+  }
+  .qrow .n { font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; width: 15px; flex: none; }
+  .qrow .cover { width: 34px; flex: none; box-shadow: none; }
+  .qrow .d { flex: 1; min-width: 0; }
+  .qrow .d b { display: block; font-size: 13.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .qrow .d small { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .qctl { display: flex; gap: 2px; flex: none; }
+  .qctl button { width: 30px; height: 30px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); display: flex; align-items: center; justify-content: center; padding: 0; }
+  .qctl button svg { width: 17px; height: 17px; }
+  .qctl button:disabled { opacity: .28; cursor: default; }
+
+  /* ---------- empty ---------- */
+  .empty { text-align: center; padding: 34px 8px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .empty h2 { font-family: var(--display); font-weight: 600; font-size: 21px; margin: 0; }
+  .empty p { margin: 0; color: var(--muted); max-width: 34ch; font-size: 13.5px; }
+  .btnstack { display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 250px; margin-top: 6px; }
+
+  .btn {
+    display: flex; align-items: center; justify-content: center; gap: 7px;
+    padding: 11px 16px;
+    border: 1px solid var(--accent); border-radius: 11px;
+    background: var(--accent); color: var(--accent-ink);
+    font-weight: 600; font-size: 14px;
+  }
+  .btn.ghost { background: var(--surface); color: var(--ink); border-color: var(--line); }
+  .btn.ghost:hover { border-color: var(--accent); }
+  .btn.warn { background: transparent; border-color: var(--danger); color: var(--danger); }
+  .btn svg { width: 17px; height: 17px; }
+  .btn:disabled { opacity: .5; cursor: default; }
+
+  /* ---------- detail ---------- */
+  .dhead { display: flex; gap: 14px; margin-bottom: 16px; }
+  .dhead .cover { width: 96px; flex: none; }
+  .dmeta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+  .dmeta h1 { font-family: var(--display); font-weight: 600; font-size: 21px; line-height: 1.2; margin: 0; text-wrap: balance; }
+  .dmeta .k { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .sect { margin: 20px 0 10px; font-size: 11px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--faint); }
+  .tagedit { display: flex; gap: 8px; align-items: center; }
+  .chip.del { gap: 5px; display: inline-flex; align-items: center; }
+  .chip.del svg { width: 11px; height: 11px; }
+
+  .thumbs { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  @media (min-width: 560px) { .thumbs { grid-template-columns: repeat(3, 1fr); } }
+  .thumb { border: 0; background: none; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+  .thumb .box {
+    position: relative; aspect-ratio: 2 / 3; width: 100%;
+    border-radius: 5px; overflow: hidden; background: var(--surface-2);
+    border: 1px solid var(--line);
+  }
+  .thumb .box img, .thumb .box canvas { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .thumb[data-current="1"] .box { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+  .thumb span { font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+
+  /* ---------- settings ---------- */
+  .card { border: 1px solid var(--line); border-radius: 14px; background: var(--surface); padding: 14px; margin-bottom: 12px; }
+  .row { display: flex; align-items: center; gap: 14px; padding: 9px 0; }
+  .row + .row { border-top: 1px solid var(--line); }
+  .row .l { flex: 1; min-width: 0; }
+  .row .l b { display: block; font-size: 13.5px; font-weight: 500; }
+  .row .l small { color: var(--muted); font-size: 12px; }
+  .seg { display: flex; gap: 4px; padding: 3px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); flex: none; }
+  .seg button { border: 0; border-radius: 7px; background: transparent; padding: 6px 11px; font-size: 12.5px; font-weight: 500; color: var(--muted); }
+  .seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+
+  .switch { flex: none; width: 46px; height: 28px; border-radius: 999px; border: 0; background: var(--line); position: relative; transition: background .18s; padding: 0; }
+  .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 999px; background: #fff; transition: transform .18s; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+  .switch[aria-checked="true"] { background: var(--accent); }
+  .switch[aria-checked="true"]::after { transform: translateX(18px); }
+
+  .bar { height: 7px; border-radius: 999px; background: var(--surface-2); overflow: hidden; margin: 8px 0 6px; }
+  .bar i { display: block; height: 100%; background: var(--accent); }
+
+  /* ---------- reader ---------- */
+  #reader { position: fixed; inset: 0; z-index: 60; background: #000; display: flex; flex-direction: column; }
+  #stage { flex: 1; position: relative; overflow: hidden; touch-action: pan-y; }
+  #stage img, #stage canvas {
+    position: absolute; inset: 0; margin: auto;
+    max-width: 100%; max-height: 100%;
+    width: auto; height: auto;
+    object-fit: contain;
+  }
+  .zones { position: absolute; inset: 0; display: flex; }
+  .zones.vert { flex-direction: column; }
+  .zones button { border: 0; background: transparent; padding: 0; }
+  #spin {
+    position: absolute; left: 50%; top: 50%; width: 26px; height: 26px; margin: -13px 0 0 -13px;
+    border: 2px solid rgba(255,255,255,.25); border-top-color: #fff; border-radius: 999px;
+    animation: sp .7s linear infinite;
+  }
+  @keyframes sp { to { transform: rotate(360deg); } }
+
+  .rchrome {
+    position: absolute; left: 0; right: 0; z-index: 2;
+    background: rgba(12, 14, 17, .88);
+    backdrop-filter: blur(10px);
+    color: #eef1f3;
+  }
+  #rtop { top: 0; padding: 10px 12px; padding-top: calc(10px + env(safe-area-inset-top, 0px)); display: flex; align-items: center; gap: 10px; }
+  #rtop b { font-size: 13.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #rbot { bottom: 0; padding: 10px 16px; padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 8px; }
+  .rchrome .iconbtn { background: rgba(255,255,255,.1); border-color: rgba(255,255,255,.16); color: #eef1f3; }
+  #rcount { font-size: 12.5px; font-variant-numeric: tabular-nums; text-align: center; color: #b9c2c9; }
+  #rslider { width: 100%; accent-color: var(--accent); }
+
+  /* ---------- sheet / modal ---------- */
+  .scrim { position: fixed; inset: 0; z-index: 70; background: rgba(8, 10, 12, .55); display: flex; align-items: flex-end; justify-content: center; }
+  .sheet {
+    width: 100%; max-width: 460px;
+    background: var(--surface);
+    border-radius: 16px 16px 0 0;
+    padding: 18px;
+    padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+    box-shadow: var(--shadow);
+  }
+  .sheet h3 { font-family: var(--display); font-weight: 600; font-size: 18px; margin: 0 0 4px; }
+  .sheet p { margin: 0 0 14px; color: var(--muted); font-size: 13.5px; }
+  .sheet .btnstack { max-width: none; margin-top: 0; }
+
+  .toast {
+    position: fixed; left: 50%; bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+    transform: translateX(-50%);
+    z-index: 80;
+    max-width: calc(100% - 32px);
+    padding: 10px 16px; border-radius: 999px;
+    background: var(--ink); color: var(--bg);
+    font-size: 13px; font-weight: 500;
+    box-shadow: var(--shadow);
+  }
+</style>
+
+<div id="app">
+  <header class="topbar">
+    <div class="wordmark">Paper<span>Shelf</span></div>
+    <button class="iconbtn" id="addBtn" aria-label="Add books" title="Add books">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+    </button>
+  </header>
+
+  <main id="main"><div class="wrap" id="view"></div></main>
+
+  <nav class="tabbar" id="tabs">
+    <button data-tab="shelf" aria-selected="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 4h5v16H4zM11 4h4v16h-4z"/><path d="M17.5 4.6l3 15.2"/></svg>
+      Shelf
+    </button>
+    <button data-tab="queue" aria-selected="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12v18l-6-4.5L6 21z"/></svg>
+      Reading
+    </button>
+    <button data-tab="settings" aria-selected="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg>
+      Settings
+    </button>
+  </nav>
+</div>
+
+<input type="file" id="filePdf" accept="application/pdf,.pdf" multiple hidden>
+<input type="file" id="fileZip" accept=".cbz,.zip,application/zip,application/vnd.comicbook+zip" multiple hidden>
+<input type="file" id="fileImg" accept="image/*" multiple hidden>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+(() => {
+  "use strict";
+
+  const IMG_EXT = /\.(jpe?g|png|gif|webp|bmp|avif)$/i;
+  const $ = (s) => document.querySelector(s);
+  const el = (t, c) => { const n = document.createElement(t); if (c) n.className = c; return n; };
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const nat = (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
+  const uid = () => Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7);
+
+  /* ============ PDF engine ============
+     A Worker cannot be constructed straight from a cross-origin CDN URL — the
+     browser raises SecurityError and pdf.js then waits forever. So set the
+     engine up explicitly, preferring a real background thread and falling back
+     to the main thread where the page is not allowed to fetch the source. */
+  const PDF_WORKER_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  let pdfReady = null;
+
+  function loadScriptOnce(src) {
+    return new Promise((res, rej) => {
+      const s = document.createElement("script");
+      s.src = src;
+      s.onload = () => res();
+      s.onerror = () => rej(new Error("The PDF engine could not be loaded. Check your connection."));
+      document.head.appendChild(s);
+    });
+  }
+
+  function initPdf() {
+    if (pdfReady) return pdfReady;
+    pdfReady = (async () => {
+      if (typeof pdfjsLib === "undefined") {
+        throw new Error("The PDF engine could not be loaded. Check your connection.");
+      }
+      try {
+        // Same-origin blob worker: real background rendering, so a big page
+        // never freezes the interface.
+        const r = await fetch(PDF_WORKER_URL);
+        if (r.ok) {
+          const src = await r.text();
+          pdfjsLib.GlobalWorkerOptions.workerSrc =
+            URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
+          return "worker";
+        }
+      } catch (_) {
+        // Fetching across origins is not always permitted; fall through.
+      }
+      // Loading the same bundle as an ordinary script registers
+      // globalThis.pdfjsWorker, which pdf.js runs on the main thread.
+      if (!globalThis.pdfjsWorker) await loadScriptOnce(PDF_WORKER_URL);
+      pdfjsLib.GlobalWorkerOptions.workerSrc = PDF_WORKER_URL;
+      return "main-thread";
+    })();
+    return pdfReady;
+  }
+
+  /* ============ settings (per-viewer convenience only) ============ */
+  const DEFAULTS = { dir: "h", rtl: false, tapLeftNext: false, sort: "recent", theme: "auto" };
+  let cfg = { ...DEFAULTS };
+  try {
+    const raw = localStorage.getItem("papershelf.cfg");
+    if (raw) cfg = { ...cfg, ...JSON.parse(raw) };
+  } catch (_) { /* private window or blocked storage — defaults are fine */ }
+  const saveCfg = () => { try { localStorage.setItem("papershelf.cfg", JSON.stringify(cfg)); } catch (_) {} };
+  const applyTheme = () => {
+    if (cfg.theme === "auto") delete document.documentElement.dataset.theme;
+    else document.documentElement.dataset.theme = cfg.theme;
+  };
+  applyTheme();
+
+  /* ============ IndexedDB ============ */
+  let db = null;
+  const rq = (r) => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+
+  function openDB() {
+    return new Promise((res, rej) => {
+      const r = indexedDB.open("papershelf", 1);
+      r.onupgradeneeded = () => {
+        const d = r.result;
+        if (!d.objectStoreNames.contains("books")) d.createObjectStore("books", { keyPath: "id" });
+        if (!d.objectStoreNames.contains("blobs")) d.createObjectStore("blobs");
+      };
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+  }
+  const store = (name, mode) => db.transaction(name, mode).objectStore(name);
+  const getBooks = () => rq(store("books", "readonly").getAll());
+  const putBook = (b) => rq(store("books", "readwrite").put(b));
+  const getBlob = (k) => rq(store("blobs", "readonly").get(k));
+  const putBlob = (k, v) => rq(store("blobs", "readwrite").put(v, k));
+
+  async function deleteBook(id) {
+    await rq(store("books", "readwrite").delete(id));
+    const s = store("blobs", "readwrite");
+    await rq(s.delete("pdf:" + id));
+    await rq(s.delete("cv:" + id));
+    // Page keys are `pg:<id>:0001` — clear the whole range in one sweep.
+    await rq(store("blobs", "readwrite").delete(IDBKeyRange.bound("pg:" + id + ":", "pg:" + id + ":￿")));
+    for (const [k, u] of urlCache) if (k.includes(id)) { URL.revokeObjectURL(u); urlCache.delete(k); }
+    pdfCache.delete(id);
+  }
+
+  /* ============ caches ============ */
+  const urlCache = new Map();   // blob key -> object URL
+  const pdfCache = new Map();   // book id -> pdf.js document
+  const countCache = new Map(); // book id -> page count
+
+  async function blobUrl(key) {
+    if (urlCache.has(key)) return urlCache.get(key);
+    const b = await getBlob(key);
+    if (!b) return null;
+    const u = URL.createObjectURL(b);
+    urlCache.set(key, u);
+    return u;
+  }
+
+  const pageKey = (id, i) => "pg:" + id + ":" + String(i + 1).padStart(4, "0");
+
+  async function pdfDoc(id) {
+    if (pdfCache.has(id)) return pdfCache.get(id);
+    await initPdf();
+    const b = await getBlob("pdf:" + id);
+    if (!b) throw new Error("The PDF file for this book is missing.");
+    const data = new Uint8Array(await b.arrayBuffer());
+    const doc = await pdfjsLib.getDocument({ data }).promise;
+    pdfCache.set(id, doc);
+    return doc;
+  }
+
+  /** Render one PDF page into a canvas, fitted to the given box. */
+  async function drawPdf(id, index, canvas, boxW, boxH) {
+    const doc = await pdfDoc(id);
+    const page = await doc.getPage(index + 1);
+    const base = page.getViewport({ scale: 1 });
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const scale = Math.min(boxW / base.width, boxH / base.height) * dpr;
+    const vp = page.getViewport({ scale: Math.max(scale, .1) });
+    canvas.width = Math.ceil(vp.width);
+    canvas.height = Math.ceil(vp.height);
+    canvas.style.width = Math.ceil(vp.width / dpr) + "px";
+    canvas.style.height = Math.ceil(vp.height / dpr) + "px";
+    await page.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
+  }
+
+  /* ============ model helpers ============ */
+  let books = [];
+
+  function pageCount(b) {
+    if (b.kind === "images") return b.pageCount || 0;
+    return countCache.get(b.id) ?? b.pageCount ?? 0;
+  }
+
+  function matches(b, q) {
+    const terms = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (!terms.length) return true;
+    const hay = [b.title, ...(b.tags || [])].join(" ").toLowerCase();
+    return terms.every((t) => (t.startsWith("-") && t.length > 1 ? !hay.includes(t.slice(1)) : hay.includes(t)));
+  }
+
+  function shelfBooks() {
+    const act = state.tags;
+    let list = books.filter((b) => matches(b, state.q) && act.every((t) => (b.tags || []).includes(t)));
+    if (cfg.sort === "title") list.sort((a, b) => nat(a.title, b.title));
+    else if (cfg.sort === "oldest") list.sort((a, b) => a.addedAt - b.addedAt);
+    else list.sort((a, b) => b.addedAt - a.addedAt);
+    return list;
+  }
+  const queueBooks = () => books.filter((b) => b.queuedAt != null).sort((a, b) => a.queuedAt - b.queuedAt);
+  const allTags = () => [...new Set(books.flatMap((b) => b.tags || []))].sort(nat);
+
+  /* ============ UI state ============ */
+  const state = { tab: "shelf", q: "", tags: [], detail: null, busy: false };
+
+  function toast(msg, ms = 2600) {
+    const old = $(".toast"); if (old) old.remove();
+    const t = el("div", "toast");
+    t.setAttribute("role", "status");
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), ms);
+  }
+
+  /** Confirmation sheet — the viewer frame suppresses window.confirm. */
+  function ask({ title, body, confirmLabel = "Confirm", danger = false }) {
+    return new Promise((resolve) => {
+      const scrim = el("div", "scrim");
+      const sheet = el("div", "sheet");
+      sheet.innerHTML =
+        "<h3>" + esc(title) + "</h3><p>" + esc(body) + "</p>" +
+        '<div class="btnstack">' +
+        '<button class="btn ' + (danger ? "warn" : "") + '" data-ok>' + esc(confirmLabel) + "</button>" +
+        '<button class="btn ghost" data-no>Cancel</button></div>';
+      scrim.appendChild(sheet);
+      const done = (v) => { scrim.remove(); resolve(v); };
+      sheet.querySelector("[data-ok]").onclick = () => done(true);
+      sheet.querySelector("[data-no]").onclick = () => done(false);
+      scrim.onclick = (e) => { if (e.target === scrim) done(false); };
+      document.body.appendChild(scrim);
+      sheet.querySelector("[data-ok]").focus();
+    });
+  }
+
+  /* ============ import ============ */
+  const titleOf = (name) => (name.split(/[\\/]/).pop() || name).replace(/\.[^.]+$/, "").trim() || "Untitled";
+
+  async function requestPersist() {
+    try {
+      if (navigator.storage && navigator.storage.persist && !(await navigator.storage.persisted())) {
+        await navigator.storage.persist();
+      }
+    } catch (_) {}
+  }
+
+  async function importPdfs(files) {
+    let ok = 0;
+    await initPdf();
+    for (const f of files) {
+      const id = uid();
+      try {
+        await putBlob("pdf:" + id, f);
+        const data = new Uint8Array(await f.arrayBuffer());
+        const doc = await pdfjsLib.getDocument({ data }).promise;
+        const n = doc.numPages;
+        // Cover: page 1 rasterised once so the shelf never needs the PDF.
+        const page = await doc.getPage(1);
+        const base = page.getViewport({ scale: 1 });
+        const c = el("canvas");
+        const vp = page.getViewport({ scale: Math.min(420 / base.width, 2) });
+        c.width = Math.ceil(vp.width); c.height = Math.ceil(vp.height);
+        await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
+        const cover = await new Promise((r) => c.toBlob(r, "image/jpeg", .82));
+        if (cover) await putBlob("cv:" + id, cover);
+        await putBook({ id, kind: "pdf", title: titleOf(f.name), pageCount: n, addedAt: Date.now(), tags: [], queuedAt: null, lastPage: 0 });
+        ok++;
+      } catch (e) {
+        await deleteBook(id).catch(() => {});
+        toast("Could not read " + f.name);
+      }
+    }
+    return ok;
+  }
+
+  async function importZips(files) {
+    let ok = 0;
+    for (const f of files) {
+      const id = uid();
+      try {
+        const zip = await JSZip.loadAsync(f);
+        const names = Object.keys(zip.files)
+          .filter((n) => !zip.files[n].dir && !n.includes("__MACOSX") && IMG_EXT.test(n))
+          .sort(nat);
+        if (!names.length) { toast("No images inside " + f.name); continue; }
+        for (let i = 0; i < names.length; i++) {
+          await putBlob(pageKey(id, i), await zip.files[names[i]].async("blob"));
+        }
+        const first = await getBlob(pageKey(id, 0));
+        if (first) await putBlob("cv:" + id, first);
+        await putBook({ id, kind: "images", title: titleOf(f.name), pageCount: names.length, addedAt: Date.now(), tags: [], queuedAt: null, lastPage: 0 });
+        ok++;
+      } catch (e) {
+        await deleteBook(id).catch(() => {});
+        toast("Could not open " + f.name);
+      }
+    }
+    return ok;
+  }
+
+  async function importImages(files) {
+    const id = uid();
+    try {
+      const list = [...files].sort((a, b) => nat(a.name, b.name));
+      for (let i = 0; i < list.length; i++) await putBlob(pageKey(id, i), list[i]);
+      await putBlob("cv:" + id, list[0]);
+      await putBook({
+        id, kind: "images",
+        title: "Images " + new Date().toISOString().slice(0, 10),
+        pageCount: list.length, addedAt: Date.now(), tags: [], queuedAt: null, lastPage: 0,
+      });
+      return 1;
+    } catch (e) {
+      await deleteBook(id).catch(() => {});
+      toast("Could not import those photos");
+      return 0;
+    }
+  }
+
+  async function runImport(kind, files) {
+    if (!files || !files.length) return;
+    state.busy = true; render();
+    await requestPersist();
+    let n = 0;
+    try {
+      if (kind === "pdf") n = await importPdfs(files);
+      else if (kind === "zip") n = await importZips(files);
+      else n = await importImages(files);
+      books = await getBooks();
+    } catch (e) {
+      toast(e.message || "Import failed");
+    }
+    state.busy = false;
+    render();
+    if (n) toast(n === 1 ? "Added 1 book" : "Added " + n + " books");
+  }
+
+  $("#filePdf").onchange = (e) => { runImport("pdf", e.target.files); e.target.value = ""; };
+  $("#fileZip").onchange = (e) => { runImport("zip", e.target.files); e.target.value = ""; };
+  $("#fileImg").onchange = (e) => { runImport("img", e.target.files); e.target.value = ""; };
+
+  function addSheet() {
+    const scrim = el("div", "scrim");
+    const sheet = el("div", "sheet");
+    sheet.innerHTML =
+      "<h3>Add books</h3><p>Files are copied into this app, so the originals can be moved or deleted afterwards.</p>" +
+      '<div class="btnstack">' +
+      '<button class="btn" data-k="pdf">PDF files</button>' +
+      '<button class="btn ghost" data-k="zip">CBZ or ZIP archives</button>' +
+      '<button class="btn ghost" data-k="img">Photos</button>' +
+      '<button class="btn ghost" data-no>Cancel</button></div>';
+    scrim.appendChild(sheet);
+    const close = () => scrim.remove();
+    sheet.querySelectorAll("[data-k]").forEach((b) => {
+      b.onclick = () => { close(); ({ pdf: "#filePdf", zip: "#fileZip", img: "#fileImg" })[b.dataset.k] && $({ pdf: "#filePdf", zip: "#fileZip", img: "#fileImg" }[b.dataset.k]).click(); };
+    });
+    sheet.querySelector("[data-no]").onclick = close;
+    scrim.onclick = (e) => { if (e.target === scrim) close(); };
+    document.body.appendChild(scrim);
+  }
+  $("#addBtn").onclick = addSheet;
+
+  /* ============ cover rendering ============ */
+  function coverNode(b, opts = {}) {
+    const d = el("div", "cover");
+    const ph = el("div", "ph");
+    ph.innerHTML =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 2h8l4 4v16H6z"/><path d="M14 2v5h5"/></svg>' +
+      "<span>" + (b.kind === "pdf" ? "PDF" : "Empty") + "</span>";
+    d.appendChild(ph);
+
+    blobUrl("cv:" + b.id).then((u) => {
+      if (!u) return;
+      const img = el("img");
+      img.src = u;
+      img.alt = "";
+      img.loading = "lazy";
+      img.onload = () => ph.remove();
+      d.appendChild(img);
+    });
+
+    const total = pageCount(b);
+    if (opts.progress && total > 1 && b.lastPage > 0) {
+      const p = el("i", "progress");
+      p.style.height = Math.round(((b.lastPage + 1) / total) * 100) + "%";
+      d.appendChild(p);
+    }
+    if (opts.queued && b.queuedAt != null) {
+      const q = el("div", "queued");
+      q.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 3h12v18l-6-4.5L6 21z"/></svg>';
+      d.appendChild(q);
+    }
+    return d;
+  }
+
+  /* ============ views ============ */
+  function render() {
+    const v = $("#view");
+    v.innerHTML = "";
+    $("#tabs").querySelectorAll("button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === state.tab && !state.detail)));
+    $("#addBtn").hidden = !!state.detail || state.tab === "settings";
+
+    if (state.detail) return viewDetail(v);
+    if (state.tab === "shelf") return viewShelf(v);
+    if (state.tab === "queue") return viewQueue(v);
+    return viewSettings(v);
+  }
+
+  function viewShelf(v) {
+    if (!books.length) {
+      const e = el("div", "empty");
+      e.innerHTML =
+        "<h2>Your shelf is empty</h2><p>Bring in a PDF, a CBZ archive, or a batch of photos. Each one becomes a book you can page through.</p>" +
+        '<div class="btnstack"><button class="btn" data-k="pdf">Add PDFs</button>' +
+        '<button class="btn ghost" data-k="zip">Add CBZ or ZIP</button>' +
+        '<button class="btn ghost" data-k="img">Add photos</button></div>';
+      e.querySelectorAll("[data-k]").forEach((b) => {
+        b.disabled = state.busy;
+        b.onclick = () => $({ pdf: "#filePdf", zip: "#fileZip", img: "#fileImg" }[b.dataset.k]).click();
+      });
+      v.appendChild(e);
+      return;
+    }
+
+    const row = el("div", "searchrow");
+    const f = el("label", "field");
+    f.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>';
+    const inp = el("input");
+    inp.id = "searchInput";
+    inp.type = "search";
+    inp.placeholder = "Search titles and tags";
+    inp.value = state.q;
+    inp.autocomplete = "off";
+    inp.oninput = () => { state.q = inp.value; redrawShelfOnly(); };
+    f.appendChild(inp);
+    row.appendChild(f);
+    v.appendChild(row);
+
+    const hint = el("p", "hint");
+    hint.textContent = "Words narrow together. Put a minus in front to exclude, like: naruto -color";
+    v.appendChild(hint);
+
+    const tags = allTags();
+    if (tags.length) {
+      const cr = el("div", "chiprow");
+      tags.forEach((t) => {
+        const c = el("button", "chip");
+        c.textContent = t;
+        c.setAttribute("aria-pressed", String(state.tags.includes(t)));
+        c.onclick = () => {
+          state.tags = state.tags.includes(t) ? state.tags.filter((x) => x !== t) : [...state.tags, t];
+          render();
+          const si = $("#searchInput"); if (si) si.value = state.q;
+        };
+        cr.appendChild(c);
+      });
+      v.appendChild(cr);
+    }
+
+    const list = shelfBooks();
+    const mr = el("div", "metarow");
+    const cnt = el("span");
+    cnt.id = "shelfCount";
+    cnt.textContent = list.length + " of " + books.length + (books.length === 1 ? " book" : " books");
+    const sortBtn = el("button", "linkbtn");
+    sortBtn.textContent = { recent: "Recently added", title: "Title A–Z", oldest: "Oldest first" }[cfg.sort];
+    sortBtn.onclick = () => {
+      const order = ["recent", "title", "oldest"];
+      cfg.sort = order[(order.indexOf(cfg.sort) + 1) % 3];
+      saveCfg(); render();
+    };
+    mr.append(cnt, sortBtn);
+    v.appendChild(mr);
+
+    const grid = el("div", "shelf");
+    grid.id = "shelfGrid";
+    v.appendChild(grid);
+    fillShelf(grid, list);
+  }
+
+  function fillShelf(grid, list) {
+    grid.innerHTML = "";
+    if (!list.length) {
+      const e = el("div", "empty");
+      e.innerHTML = "<p>Nothing matches that search.</p>";
+      e.style.gridColumn = "1 / -1";
+      grid.appendChild(e);
+      return;
+    }
+    list.forEach((b) => {
+      const card = el("button", "vol");
+      card.appendChild(coverNode(b, { progress: true, queued: true }));
+      const t = el("div", "t"); t.textContent = b.title;
+      const s = el("div", "s");
+      const n = pageCount(b);
+      s.textContent = b.lastPage > 0 && n ? "Page " + (b.lastPage + 1) + " of " + n : n ? n + " pages" : "—";
+      card.append(t, s);
+      card.onclick = () => { state.detail = b.id; render(); $("#main").scrollTop = 0; };
+      grid.appendChild(card);
+    });
+  }
+
+  /** Keep focus in the search box while typing. */
+  function redrawShelfOnly() {
+    const grid = $("#shelfGrid");
+    const cnt = $("#shelfCount");
+    if (!grid) return render();
+    const list = shelfBooks();
+    if (cnt) cnt.textContent = list.length + " of " + books.length + (books.length === 1 ? " book" : " books");
+    fillShelf(grid, list);
+  }
+
+  function viewQueue(v) {
+    const list = queueBooks();
+    if (!list.length) {
+      const e = el("div", "empty");
+      e.innerHTML =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" style="width:40px;height:40px;color:var(--faint)"><path d="M6 3h12v18l-6-4.5L6 21z"/></svg>' +
+        "<h2>Nothing queued</h2><p>Open a book and tap Add to reading list to line it up here.</p>";
+      v.appendChild(e);
+      return;
+    }
+    const wrapq = el("div", "queue");
+    list.forEach((b, i) => {
+      const r = el("div", "qrow");
+      const n = el("div", "n"); n.textContent = i + 1;
+      const cov = coverNode(b);
+      const d = el("div", "d");
+      const total = pageCount(b);
+      d.innerHTML = "<b>" + esc(b.title) + "</b><small>" +
+        (b.lastPage > 0 && total ? "Page " + (b.lastPage + 1) + " of " + total : total ? total + " pages" : "—") + "</small>";
+      d.onclick = () => { state.detail = b.id; render(); };
+      cov.onclick = d.onclick;
+
+      const ctl = el("div", "qctl");
+      const mk = (label, path, disabled, fn) => {
+        const btn = el("button");
+        btn.setAttribute("aria-label", label);
+        btn.disabled = disabled;
+        btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + path + "</svg>";
+        btn.onclick = fn;
+        return btn;
+      };
+      ctl.append(
+        mk("Move up", '<path d="M6 15l6-6 6 6"/>', i === 0, async () => { await swapQueue(b, list[i - 1]); }),
+        mk("Move down", '<path d="M6 9l6 6 6-6"/>', i === list.length - 1, async () => { await swapQueue(b, list[i + 1]); }),
+        mk("Remove from reading list", '<path d="M6 3h12v18l-6-4.5L6 21z" fill="currentColor" stroke="none"/>', false, async () => {
+          b.queuedAt = null; await putBook(b); books = await getBooks(); render();
+        })
+      );
+      r.append(n, cov, d, ctl);
+      wrapq.appendChild(r);
+    });
+    v.appendChild(wrapq);
+  }
+
+  async function swapQueue(a, b) {
+    const t = a.queuedAt; a.queuedAt = b.queuedAt; b.queuedAt = t;
+    await putBook(a); await putBook(b);
+    books = await getBooks();
+    render();
+  }
+
+  function viewDetail(v) {
+    const b = books.find((x) => x.id === state.detail);
+    if (!b) { state.detail = null; return render(); }
+    const total = pageCount(b);
+
+    const bar = el("div", "searchrow");
+    const back = el("button", "iconbtn");
+    back.setAttribute("aria-label", "Back to shelf");
+    back.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>';
+    back.onclick = () => { state.detail = null; render(); };
+    const sp = el("div"); sp.style.flex = "1";
+    const del = el("button", "iconbtn");
+    del.setAttribute("aria-label", "Remove from library");
+    del.style.color = "var(--danger)";
+    del.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14"/></svg>';
+    del.onclick = async () => {
+      const yes = await ask({
+        title: "Remove this book?",
+        body: "Its pages are deleted from this app. Any original file you imported from is untouched.",
+        confirmLabel: "Remove", danger: true,
+      });
+      if (!yes) return;
+      await deleteBook(b.id);
+      books = await getBooks();
+      state.detail = null;
+      render();
+      toast("Removed");
+    };
+    bar.append(back, sp, del);
+    v.appendChild(bar);
+
+    const head = el("div", "dhead");
+    head.appendChild(coverNode(b, { progress: true }));
+    const meta = el("div", "dmeta");
+    const h1 = el("h1"); h1.textContent = b.title;
+    const k = el("div", "k");
+    k.textContent = (b.kind === "pdf" ? "PDF" : "Images") + (total ? " · " + total + " pages" : "");
+    const ren = el("button", "linkbtn");
+    ren.textContent = "Rename";
+    ren.style.alignSelf = "flex-start";
+    ren.onclick = () => renameSheet(b);
+    meta.append(h1, k, ren);
+    head.appendChild(meta);
+    v.appendChild(head);
+
+    const acts = el("div", "btnstack");
+    acts.style.maxWidth = "none";
+    if (total) {
+      const start = el("button", "btn");
+      start.textContent = "Read from start";
+      start.onclick = () => openReader(b, 0);
+      acts.appendChild(start);
+      if (b.lastPage > 0) {
+        const cont = el("button", "btn ghost");
+        cont.textContent = "Continue from page " + (b.lastPage + 1);
+        cont.onclick = () => openReader(b, b.lastPage);
+        acts.appendChild(cont);
+      }
+    }
+    const q = el("button", "btn ghost");
+    q.textContent = b.queuedAt != null ? "Remove from reading list" : "Add to reading list";
+    q.onclick = async () => { b.queuedAt = b.queuedAt != null ? null : Date.now(); await putBook(b); books = await getBooks(); render(); };
+    acts.appendChild(q);
+    v.appendChild(acts);
+
+    if (!total) {
+      const c = el("div", "card");
+      c.style.marginTop = "14px";
+      c.innerHTML = "<b>No pages found</b><br><small style='color:var(--muted)'>This book has no readable pages. The file may not have imported fully — remove it and try again.</small>";
+      v.appendChild(c);
+    }
+
+    const st = el("div", "sect"); st.textContent = "Tags";
+    v.appendChild(st);
+    const cr = el("div", "chiprow");
+    (b.tags || []).forEach((t) => {
+      const c = el("button", "chip del");
+      c.innerHTML = esc(t) + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 5l14 14M19 5L5 19"/></svg>';
+      c.setAttribute("aria-label", "Remove tag " + t);
+      c.onclick = async () => { b.tags = b.tags.filter((x) => x !== t); await putBook(b); books = await getBooks(); render(); };
+      cr.appendChild(c);
+    });
+    if (!(b.tags || []).length) {
+      const p = el("p", "hint"); p.style.margin = "0 0 10px";
+      p.textContent = "No tags yet. Tags are searchable from the shelf.";
+      cr.appendChild(p);
+    }
+    v.appendChild(cr);
+
+    const te = el("div", "tagedit");
+    const tf = el("label", "field");
+    const ti = el("input");
+    ti.placeholder = "Add a tag";
+    ti.autocapitalize = "none";
+    ti.autocomplete = "off";
+    tf.appendChild(ti);
+    const addT = el("button", "btn");
+    addT.textContent = "Add";
+    addT.style.flex = "none";
+    const commit = async () => {
+      const val = ti.value.trim();
+      if (!val) return;
+      const have = (b.tags || []).some((x) => x.toLowerCase() === val.toLowerCase());
+      if (!have) { b.tags = [...(b.tags || []), val]; await putBook(b); books = await getBooks(); }
+      ti.value = "";
+      render();
+    };
+    addT.onclick = commit;
+    ti.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); commit(); } };
+    te.append(tf, addT);
+    v.appendChild(te);
+
+    if (total) {
+      const sp2 = el("div", "sect"); sp2.textContent = "All pages";
+      v.appendChild(sp2);
+      const grid = el("div", "thumbs");
+      v.appendChild(grid);
+      buildThumbs(grid, b, total);
+    }
+  }
+
+  /** Thumbnails load as they scroll into view — a 200-page book must not
+      rasterise every page up front. */
+  function buildThumbs(grid, b, total) {
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach((en) => {
+        if (!en.isIntersecting) return;
+        const node = en.target;
+        io.unobserve(node);
+        const i = Number(node.dataset.i);
+        const box = node.querySelector(".box");
+        if (b.kind === "images") {
+          blobUrl(pageKey(b.id, i)).then((u) => {
+            if (!u) return;
+            const img = el("img"); img.src = u; img.alt = ""; box.appendChild(img);
+          });
+        } else {
+          const c = el("canvas");
+          box.appendChild(c);
+          drawPdf(b.id, i, c, 300, 450).catch(() => { c.remove(); });
+        }
+      });
+    }, { rootMargin: "300px 0px" });
+
+    for (let i = 0; i < total; i++) {
+      const t = el("button", "thumb");
+      t.dataset.i = i;
+      if (i === b.lastPage) t.dataset.current = "1";
+      const box = el("div", "box");
+      const lab = el("span"); lab.textContent = i + 1;
+      t.append(box, lab);
+      t.onclick = () => openReader(b, i);
+      grid.appendChild(t);
+      io.observe(t);
+    }
+  }
+
+  function renameSheet(b) {
+    const scrim = el("div", "scrim");
+    const sheet = el("div", "sheet");
+    sheet.innerHTML = "<h3>Rename book</h3>";
+    const f = el("label", "field");
+    const inp = el("input");
+    inp.value = b.title;
+    f.appendChild(inp);
+    const stack = el("div", "btnstack");
+    const ok = el("button", "btn"); ok.textContent = "Save";
+    const no = el("button", "btn ghost"); no.textContent = "Cancel";
+    stack.append(ok, no);
+    sheet.append(f, stack);
+    scrim.appendChild(sheet);
+    const close = () => scrim.remove();
+    ok.onclick = async () => {
+      const val = inp.value.trim();
+      if (val) { b.title = val; await putBook(b); books = await getBooks(); }
+      close(); render();
+    };
+    no.onclick = close;
+    scrim.onclick = (e) => { if (e.target === scrim) close(); };
+    inp.onkeydown = (e) => { if (e.key === "Enter") ok.click(); };
+    document.body.appendChild(scrim);
+    inp.focus();
+    inp.select();
+  }
+
+  function viewSettings(v) {
+    const mkRow = (label, hint, control) => {
+      const r = el("div", "row");
+      const l = el("div", "l");
+      l.innerHTML = "<b>" + esc(label) + "</b><small>" + esc(hint) + "</small>";
+      r.append(l, control);
+      return r;
+    };
+    const mkSwitch = (on, fn) => {
+      const s = el("button", "switch");
+      s.setAttribute("role", "switch");
+      s.setAttribute("aria-checked", String(!!on));
+      s.onclick = () => { fn(); saveCfg(); render(); };
+      return s;
+    };
+    const mkSeg = (opts, cur, fn) => {
+      const s = el("div", "seg");
+      opts.forEach(([val, lab]) => {
+        const b = el("button");
+        b.textContent = lab;
+        b.setAttribute("aria-pressed", String(val === cur));
+        b.onclick = () => { fn(val); saveCfg(); render(); };
+        s.appendChild(b);
+      });
+      return s;
+    };
+
+    const c1 = el("div", "card");
+    const t1 = el("div", "sect"); t1.style.margin = "0 0 4px"; t1.textContent = "Reader";
+    c1.appendChild(t1);
+    c1.appendChild(mkRow("Page direction", "Which way a page turn moves.",
+      mkSeg([["h", "Sideways"], ["v", "Up / down"]], cfg.dir, (x) => { cfg.dir = x; })));
+    c1.appendChild(mkRow("Right to left", "Manga order. Applies when paging sideways.",
+      mkSwitch(cfg.rtl, () => { cfg.rtl = !cfg.rtl; })));
+    c1.appendChild(mkRow("Tap left to go forward", "Swaps which side advances.",
+      mkSwitch(cfg.tapLeftNext, () => { cfg.tapLeftNext = !cfg.tapLeftNext; })));
+    v.appendChild(c1);
+
+    const c2 = el("div", "card");
+    const t2 = el("div", "sect"); t2.style.margin = "0 0 4px"; t2.textContent = "Appearance";
+    c2.appendChild(t2);
+    c2.appendChild(mkRow("Theme", "Auto follows your device.",
+      mkSeg([["auto", "Auto"], ["light", "Light"], ["dark", "Dark"]], cfg.theme, (x) => { cfg.theme = x; applyTheme(); })));
+    v.appendChild(c2);
+
+    const c3 = el("div", "card");
+    const t3 = el("div", "sect"); t3.style.margin = "0 0 8px"; t3.textContent = "Storage";
+    c3.appendChild(t3);
+    const info = el("div");
+    info.innerHTML = "<small style='color:var(--muted)'>Checking…</small>";
+    c3.appendChild(info);
+    v.appendChild(c3);
+
+    (async () => {
+      let line = "";
+      try {
+        const est = await navigator.storage.estimate();
+        const gb = (n) => (n / 1073741824).toFixed(n > 1073741824 ? 2 : 3) + " GB";
+        const pct = est.quota ? Math.min(100, (est.usage / est.quota) * 100) : 0;
+        const persisted = navigator.storage.persisted ? await navigator.storage.persisted() : false;
+        line =
+          '<div class="bar"><i style="width:' + pct.toFixed(1) + '%"></i></div>' +
+          "<small style='color:var(--muted);font-variant-numeric:tabular-nums'>" +
+          gb(est.usage || 0) + " used of about " + gb(est.quota || 0) + " available" +
+          "</small><br><small style='color:var(--muted)'>" +
+          (persisted
+            ? "This browser has marked your books as protected storage."
+            : "Add this page to your Home Screen to keep your books from being cleared.") +
+          "</small>";
+      } catch (_) {
+        line = "<small style='color:var(--muted)'>This browser will not report how much space is in use.</small>";
+      }
+      info.innerHTML = line +
+        "<br><br><small style='color:var(--muted)'>" +
+        books.length + (books.length === 1 ? " book is" : " books are") +
+        " stored in this browser on this device. They are not uploaded anywhere, and will not appear in other browsers." +
+        "</small>";
+    })();
+  }
+
+  /* ============ reader ============ */
+  const R = { book: null, page: 0, chrome: false, node: null, token: 0 };
+
+  function openReader(b, page) {
+    R.book = b;
+    R.page = Math.min(Math.max(page | 0, 0), Math.max(0, pageCount(b) - 1));
+    R.chrome = false;
+
+    const r = el("div", "reader");
+    r.id = "reader";
+    r.innerHTML =
+      '<div id="stage"><div id="spin"></div></div>' +
+      '<div class="rchrome" id="rtop" hidden>' +
+      '<button class="iconbtn" id="rclose" aria-label="Close reader"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>' +
+      "<b></b></div>" +
+      '<div class="rchrome" id="rbot" hidden><input type="range" id="rslider" min="0" step="1"><div id="rcount"></div></div>';
+    document.body.appendChild(r);
+    R.node = r;
+    r.querySelector("#rtop b").textContent = b.title;
+    r.querySelector("#rclose").onclick = closeReader;
+
+    const stage = r.querySelector("#stage");
+    const zones = el("div", "zones" + (cfg.dir === "v" ? " vert" : ""));
+    const mkZone = (flex, label, fn) => {
+      const z = el("button");
+      z.style.flex = String(flex);
+      z.setAttribute("aria-label", label);
+      z.onclick = fn;
+      return z;
+    };
+    // Sideways + right-to-left flips which edge means "next".
+    const firstIsNext = cfg.dir === "h" ? (cfg.rtl ? !cfg.tapLeftNext : cfg.tapLeftNext) : false;
+    zones.append(
+      mkZone(0.3, firstIsNext ? "Next page" : "Previous page", () => step(firstIsNext ? 1 : -1)),
+      mkZone(0.4, "Show controls", toggleChrome),
+      mkZone(0.3, firstIsNext ? "Previous page" : "Next page", () => step(firstIsNext ? -1 : 1))
+    );
+    stage.appendChild(zones);
+
+    const sl = r.querySelector("#rslider");
+    sl.max = String(Math.max(0, pageCount(b) - 1));
+    sl.value = String(R.page);
+    sl.oninput = () => { R.page = Number(sl.value); paint(); };
+
+    let sx = 0, sy = 0, moved = false;
+    stage.addEventListener("touchstart", (e) => {
+      if (e.touches.length !== 1) return;
+      sx = e.touches[0].clientX; sy = e.touches[0].clientY; moved = false;
+    }, { passive: true });
+    stage.addEventListener("touchend", (e) => {
+      if (moved) return;
+      const t = e.changedTouches[0];
+      const dx = t.clientX - sx, dy = t.clientY - sy;
+      if (cfg.dir === "h" && Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy)) {
+        // Swiping left normally advances; right-to-left reverses it.
+        step(dx < 0 ? (cfg.rtl ? -1 : 1) : (cfg.rtl ? 1 : -1));
+      } else if (cfg.dir === "v" && Math.abs(dy) > 45 && Math.abs(dy) > Math.abs(dx)) {
+        step(dy < 0 ? 1 : -1);
+      }
+    }, { passive: true });
+
+    document.addEventListener("keydown", keyNav);
+    paint();
+  }
+
+  function keyNav(e) {
+    if (!R.node) return;
+    if (e.key === "Escape") return closeReader();
+    if (e.key === "ArrowRight" || e.key === "ArrowDown" || e.key === " ") { e.preventDefault(); step(cfg.rtl && cfg.dir === "h" ? -1 : 1); }
+    if (e.key === "ArrowLeft" || e.key === "ArrowUp") { e.preventDefault(); step(cfg.rtl && cfg.dir === "h" ? 1 : -1); }
+  }
+
+  function toggleChrome() {
+    R.chrome = !R.chrome;
+    R.node.querySelector("#rtop").hidden = !R.chrome;
+    R.node.querySelector("#rbot").hidden = !R.chrome;
+  }
+
+  function step(delta) {
+    const total = pageCount(R.book);
+    const next = R.page + delta;
+    if (next < 0 || next >= total) return;
+    R.page = next;
+    const sl = R.node.querySelector("#rslider");
+    if (sl) sl.value = String(R.page);
+    paint();
+  }
+
+  async function paint() {
+    const b = R.book, i = R.page;
+    const stage = R.node.querySelector("#stage");
+    const total = pageCount(b);
+    R.node.querySelector("#rcount").textContent =
+      (i + 1) + " / " + total + (cfg.dir === "h" && cfg.rtl ? "   ·   right to left" : "");
+
+    const my = ++R.token;
+    let spin = stage.querySelector("#spin");
+    if (!spin) { spin = el("div"); spin.id = "spin"; stage.appendChild(spin); }
+    spin.hidden = false;
+
+    const clear = () => stage.querySelectorAll("img,canvas").forEach((n) => n.remove());
+
+    try {
+      if (b.kind === "images") {
+        const u = await blobUrl(pageKey(b.id, i));
+        if (my !== R.token) return;
+        clear();
+        if (u) {
+          const img = el("img");
+          img.alt = "Page " + (i + 1);
+          img.onload = () => { if (my === R.token) spin.hidden = true; };
+          img.src = u;
+          stage.insertBefore(img, stage.firstChild);
+        } else { spin.hidden = true; }
+      } else {
+        const c = el("canvas");
+        await drawPdf(b.id, i, c, stage.clientWidth || 800, stage.clientHeight || 1200);
+        if (my !== R.token) return;
+        clear();
+        stage.insertBefore(c, stage.firstChild);
+        spin.hidden = true;
+      }
+    } catch (e) {
+      if (my !== R.token) return;
+      clear();
+      spin.hidden = true;
+      toast(e.message || "Could not show that page");
+    }
+
+    // Remember the furthest point reached, so Continue works next time.
+    if (b.lastPage !== i) {
+      b.lastPage = i;
+      putBook(b).catch(() => {});
+    }
+  }
+
+  function closeReader() {
+    document.removeEventListener("keydown", keyNav);
+    if (R.node) R.node.remove();
+    R.node = null;
+    R.token++;
+    getBooks().then((bs) => { books = bs; render(); });
+  }
+
+  /* ============ tabs ============ */
+  $("#tabs").querySelectorAll("button").forEach((btn) => {
+    btn.onclick = () => {
+      state.tab = btn.dataset.tab;
+      state.detail = null;
+      render();
+      $("#main").scrollTop = 0;
+    };
+  });
+
+  /* ============ boot ============ */
+  (async () => {
+    try {
+      db = await openDB();
+      books = await getBooks();
+    } catch (e) {
+      const v = $("#view");
+      v.innerHTML =
+        '<div class="empty"><h2>Storage is unavailable</h2>' +
+        "<p>This browser will not let the page store books. Private browsing and blocked site data are the usual causes — try a normal window.</p></div>";
+      return;
+    }
+    render();
+  })();
+})();
+</script>
+
+</body>
+</html>
