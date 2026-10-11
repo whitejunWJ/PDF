@@ -508,9 +508,10 @@
 
   async function deleteBook(id) {
     await rq(store("books", "readwrite").delete(id));
-    const s = store("blobs", "readwrite");
-    await rq(s.delete("pdf:" + id));
-    await rq(s.delete("cv:" + id));
+    // A fresh transaction per step: an IndexedDB transaction commits as soon
+    // as its work drains, so reusing one across an await can throw.
+    await rq(store("blobs", "readwrite").delete("pdf:" + id));
+    await rq(store("blobs", "readwrite").delete("cv:" + id));
     // Page keys are `pg:<id>:0001` — clear the whole range in one sweep.
     await rq(store("blobs", "readwrite").delete(IDBKeyRange.bound("pg:" + id + ":", "pg:" + id + ":￿")));
     for (const [k, u] of urlCache) if (k.includes(id)) { URL.revokeObjectURL(u); urlCache.delete(k); }
@@ -719,9 +720,19 @@
     if (n) toast(n === 1 ? "Added 1 book" : "Added " + n + " books");
   }
 
-  $("#filePdf").onchange = (e) => { runImport("pdf", e.target.files); e.target.value = ""; };
-  $("#fileZip").onchange = (e) => { runImport("zip", e.target.files); e.target.value = ""; };
-  $("#fileImg").onchange = (e) => { runImport("img", e.target.files); e.target.value = ""; };
+  /* Copy the FileList into a real array BEFORE resetting the input. Clearing
+     `value` empties the FileList object itself, and runImport is async — read
+     it first or the import sees no files at all. */
+  function onPick(kind) {
+    return (e) => {
+      const picked = Array.from(e.target.files || []);
+      e.target.value = "";
+      runImport(kind, picked);
+    };
+  }
+  $("#filePdf").onchange = onPick("pdf");
+  $("#fileZip").onchange = onPick("zip");
+  $("#fileImg").onchange = onPick("img");
 
   function addSheet() {
     const scrim = el("div", "scrim");
@@ -735,8 +746,15 @@
       '<button class="btn ghost" data-no>Cancel</button></div>';
     scrim.appendChild(sheet);
     const close = () => scrim.remove();
+    const inputs = { pdf: "#filePdf", zip: "#fileZip", img: "#fileImg" };
     sheet.querySelectorAll("[data-k]").forEach((b) => {
-      b.onclick = () => { close(); ({ pdf: "#filePdf", zip: "#fileZip", img: "#fileImg" })[b.dataset.k] && $({ pdf: "#filePdf", zip: "#fileZip", img: "#fileImg" }[b.dataset.k]).click(); };
+      b.onclick = () => {
+        // Open the picker while the tap is still the active gesture, then
+        // dismiss the sheet — Safari refuses a file picker opened later.
+        const sel = inputs[b.dataset.k];
+        if (sel) $(sel).click();
+        close();
+      };
     });
     sheet.querySelector("[data-no]").onclick = close;
     scrim.onclick = (e) => { if (e.target === scrim) close(); };
@@ -750,16 +768,20 @@
     const ph = el("div", "ph");
     ph.innerHTML =
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 2h8l4 4v16H6z"/><path d="M14 2v5h5"/></svg>' +
-      "<span>" + (b.kind === "pdf" ? "PDF" : "Empty") + "</span>";
+      "<span>" + (b.kind === "pdf" ? "PDF" : "No cover") + "</span>";
     d.appendChild(ph);
 
     blobUrl("cv:" + b.id).then((u) => {
       if (!u) return;
       const img = el("img");
-      img.src = u;
       img.alt = "";
-      img.loading = "lazy";
+      // No loading="lazy" here. The cover is already a blob in memory, so
+      // there is nothing to defer, and a deferred image that never enters the
+      // viewport never loads at all — leaving the placeholder stuck over a
+      // book that is perfectly fine.
       img.onload = () => ph.remove();
+      img.onerror = () => img.remove();
+      img.src = u;
       d.appendChild(img);
     });
 
