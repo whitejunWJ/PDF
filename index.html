@@ -382,6 +382,8 @@
     font-size: 13px; font-weight: 500;
     box-shadow: var(--shadow);
   }
+  /* The import counter sits above any transient message. */
+  .toast.prog { bottom: calc(124px + env(safe-area-inset-bottom, 0px)); }
 </style>
 
 <div id="app">
@@ -539,6 +541,12 @@
 
   async function pdfDoc(id) {
     if (pdfCache.has(id)) return pdfCache.get(id);
+    // Only one book is ever being read at a time, so close any other open
+    // document rather than letting them accumulate.
+    for (const [k, d] of pdfCache) {
+      pdfCache.delete(k);
+      try { d.destroy(); } catch (_) {}
+    }
     await initPdf();
     const b = await getBlob("pdf:" + id);
     if (!b) throw new Error("The PDF file for this book is missing.");
@@ -594,12 +602,28 @@
   const state = { tab: "shelf", q: "", tags: [], detail: null, busy: false };
 
   function toast(msg, ms = 2600) {
-    const old = $(".toast"); if (old) old.remove();
+    const old = $(".toast[data-transient]"); if (old) old.remove();
     const t = el("div", "toast");
+    t.dataset.transient = "1";
     t.setAttribute("role", "status");
     t.textContent = msg;
     document.body.appendChild(t);
     setTimeout(() => t.remove(), ms);
+  }
+
+  /** A sticky counter during a long import, so a big batch never looks stuck. */
+  let progressNode = null;
+  function setProgress(text) {
+    if (!text) {
+      if (progressNode) { progressNode.remove(); progressNode = null; }
+      return;
+    }
+    if (!progressNode) {
+      progressNode = el("div", "toast prog");
+      progressNode.setAttribute("role", "status");
+      document.body.appendChild(progressNode);
+    }
+    progressNode.textContent = text;
   }
 
   /** Confirmation sheet — the viewer frame suppresses window.confirm. */
@@ -636,17 +660,20 @@
   async function importPdfs(files) {
     let ok = 0;
     await initPdf();
-    for (const f of files) {
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
       const id = uid();
+      if (files.length > 1) setProgress("Importing " + (i + 1) + " of " + files.length + "…");
+      let doc = null, page = null, c = null;
       try {
         await putBlob("pdf:" + id, f);
         const data = new Uint8Array(await f.arrayBuffer());
-        const doc = await pdfjsLib.getDocument({ data }).promise;
+        doc = await pdfjsLib.getDocument({ data }).promise;
         const n = doc.numPages;
         // Cover: page 1 rasterised once so the shelf never needs the PDF.
-        const page = await doc.getPage(1);
+        page = await doc.getPage(1);
         const base = page.getViewport({ scale: 1 });
-        const c = el("canvas");
+        c = el("canvas");
         const vp = page.getViewport({ scale: Math.min(420 / base.width, 2) });
         c.width = Math.ceil(vp.width); c.height = Math.ceil(vp.height);
         await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
@@ -657,6 +684,17 @@
       } catch (e) {
         await deleteBook(id).catch(() => {});
         toast("Could not read " + f.name);
+      } finally {
+        /* Hand back every byte before starting the next file. A PDF left open
+           keeps its parsed pages and its whole buffer alive, so importing a
+           batch of large books piles them all up until the browser kills the
+           tab — which looks exactly like the page reloading itself. */
+        try { if (page) page.cleanup(); } catch (_) {}
+        try { if (doc) await doc.destroy(); } catch (_) {}
+        if (c) { c.width = 0; c.height = 0; }
+        doc = null; page = null; c = null;
+        // Yield so the browser can actually reclaim it, and repaint.
+        await new Promise((r) => setTimeout(r, 60));
       }
     }
     return ok;
@@ -664,9 +702,12 @@
 
   async function importZips(files) {
     let ok = 0;
-    for (const f of files) {
+    for (let fi = 0; fi < files.length; fi++) {
+      const f = files[fi];
       const id = uid();
+      const label = files.length > 1 ? (fi + 1) + " of " + files.length + ": " : "";
       try {
+        setProgress(label + "opening " + f.name + "…");
         const zip = await JSZip.loadAsync(f);
         const names = Object.keys(zip.files)
           .filter((n) => !zip.files[n].dir && !n.includes("__MACOSX") && IMG_EXT.test(n))
@@ -674,6 +715,13 @@
         if (!names.length) { toast("No images inside " + f.name); continue; }
         for (let i = 0; i < names.length; i++) {
           await putBlob(pageKey(id, i), await zip.files[names[i]].async("blob"));
+          // Drop the decompressed copy and let the browser breathe; a long
+          // archive otherwise holds every page at once.
+          delete zip.files[names[i]]._data;
+          if (i % 20 === 19) {
+            setProgress(label + "page " + (i + 1) + " of " + names.length + "…");
+            await new Promise((r) => setTimeout(r, 0));
+          }
         }
         const first = await getBlob(pageKey(id, 0));
         if (first) await putBlob("cv:" + id, first);
@@ -715,9 +763,12 @@
       if (kind === "pdf") n = await importPdfs(files);
       else if (kind === "zip") n = await importZips(files);
       else n = await importImages(files);
-      books = await getBooks();
     } catch (e) {
       toast(e.message || "Import failed");
+    } finally {
+      setProgress(null);
+      // Books that finished are already saved, so show them whatever happened.
+      try { books = await getBooks(); } catch (_) {}
     }
     state.busy = false;
     render();
