@@ -528,12 +528,20 @@
   const pdfCache = new Map();   // book id -> pdf.js document
   const countCache = new Map(); // book id -> page count
 
+  /** Object URLs keep their blob alive, so the cache is capped and oldest-out. */
+  const URL_CACHE_MAX = 240;
+
   async function blobUrl(key) {
     if (urlCache.has(key)) return urlCache.get(key);
     const b = await getBlob(key);
     if (!b) return null;
     const u = URL.createObjectURL(b);
     urlCache.set(key, u);
+    while (urlCache.size > URL_CACHE_MAX) {
+      const oldest = urlCache.keys().next().value;
+      URL.revokeObjectURL(urlCache.get(oldest));
+      urlCache.delete(oldest);
+    }
     return u;
   }
 
@@ -1146,25 +1154,84 @@
   /** Thumbnails load as they scroll into view — a 200-page book must not
       rasterise every page up front. */
   function buildThumbs(grid, b, total) {
+    /* Pages are mounted when they come near the screen and torn down again
+       when they leave. Holding every page that has ever been scrolled past is
+       what used to exhaust memory and get the tab killed: a rendered page is
+       a few megabytes, and a long book has hundreds of them. */
+    const pending = [];
+    let draining = false;
+
+    const isNear = (node) => node.dataset.near === "1";
+
+    function unmount(node) {
+      node.dataset.loaded = "";
+      node.querySelectorAll("canvas").forEach((c) => {
+        c.width = 0; c.height = 0;   // hand back the pixel buffer, not just the node
+        c.remove();
+      });
+      node.querySelectorAll("img").forEach((n) => {
+        n.src = "";                  // let the decoded bitmap go
+        n.remove();
+      });
+    }
+
+    async function renderPdfThumb(node) {
+      const box = node.querySelector(".box");
+      if (!box || !node.isConnected || !isNear(node) || node.dataset.loaded) return;
+      node.dataset.loaded = "1";
+      const c = el("canvas");
+      box.appendChild(c);
+      try {
+        // Render at the size it is actually displayed at, not a fixed guess.
+        const w = Math.max(72, Math.round(box.clientWidth || 110));
+        await drawPdf(b.id, Number(node.dataset.i), c, w, Math.round(w * 1.5));
+        if (!node.isConnected || !isNear(node)) unmount(node);
+      } catch (_) {
+        c.width = 0; c.height = 0; c.remove();
+        node.dataset.loaded = "";
+      }
+    }
+
+    /** One page at a time, newest request first — that is where you are looking. */
+    async function drain() {
+      if (draining) return;
+      draining = true;
+      while (pending.length) {
+        const node = pending.pop();
+        if (node.isConnected && isNear(node) && !node.dataset.loaded) {
+          await renderPdfThumb(node);
+        }
+      }
+      draining = false;
+    }
+
+    function mount(node) {
+      if (node.dataset.loaded) return;
+      const i = Number(node.dataset.i);
+      const box = node.querySelector(".box");
+      if (b.kind === "images") {
+        node.dataset.loaded = "1";
+        blobUrl(pageKey(b.id, i)).then((u) => {
+          if (!u || !node.isConnected || !isNear(node)) return;
+          const img = el("img");
+          img.alt = "";
+          img.src = u;
+          box.appendChild(img);
+        });
+      } else {
+        pending.push(node);
+        drain();
+      }
+    }
+
     const io = new IntersectionObserver((entries) => {
       entries.forEach((en) => {
-        if (!en.isIntersecting) return;
         const node = en.target;
-        io.unobserve(node);
-        const i = Number(node.dataset.i);
-        const box = node.querySelector(".box");
-        if (b.kind === "images") {
-          blobUrl(pageKey(b.id, i)).then((u) => {
-            if (!u) return;
-            const img = el("img"); img.src = u; img.alt = ""; box.appendChild(img);
-          });
-        } else {
-          const c = el("canvas");
-          box.appendChild(c);
-          drawPdf(b.id, i, c, 300, 450).catch(() => { c.remove(); });
-        }
+        node.dataset.near = en.isIntersecting ? "1" : "";
+        if (en.isIntersecting) mount(node);
+        else unmount(node);
       });
-    }, { rootMargin: "300px 0px" });
+    }, { rootMargin: "400px 0px" });
 
     for (let i = 0; i < total; i++) {
       const t = el("button", "thumb");
@@ -1387,7 +1454,11 @@
     if (!spin) { spin = el("div"); spin.id = "spin"; stage.appendChild(spin); }
     spin.hidden = false;
 
-    const clear = () => stage.querySelectorAll("img,canvas").forEach((n) => n.remove());
+    // Release the outgoing page's pixels, not just its element.
+    const clear = () => stage.querySelectorAll("img,canvas").forEach((n) => {
+      if (n.tagName === "CANVAS") { n.width = 0; n.height = 0; } else { n.src = ""; }
+      n.remove();
+    });
 
     try {
       if (b.kind === "images") {
