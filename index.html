@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<!-- The manifest is the modern way to be an installed app. The apple- meta
-     tags below are the legacy path, kept for older iOS; with only those, iOS
-     runs the app in a mode where navigator.standalone is true but
-     display-mode: standalone does not match, and that mode has long-standing
-     keyboard faults. -->
+<!-- The manifest alone decides how this installs. `apple-mobile-web-app-capable`
+     is deliberately absent: iOS gives that tag precedence over the manifest and
+     runs the app in its legacy mode, where navigator.standalone is true,
+     display-mode: standalone does not match, and the software keyboard never
+     appears for a text field. Do not add it back without testing the search
+     box on a real iPhone. -->
 <link rel="manifest" href="manifest.webmanifest">
-<meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Paper Shelf">
@@ -468,6 +468,7 @@
 <input type="file" id="filePdf" accept="application/pdf,.pdf" multiple hidden>
 <input type="file" id="fileZip" accept=".cbz,.zip,application/zip,application/vnd.comicbook+zip" multiple hidden>
 <input type="file" id="fileImg" accept="image/*" multiple hidden>
+<input type="file" id="fileBak" accept="application/json,.json" hidden>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
@@ -478,7 +479,7 @@
   const IMG_EXT = /\.(jpe?g|png|gif|webp|bmp|avif)$/i;
   const $ = (s) => document.querySelector(s);
   const el = (t, c) => { const n = document.createElement(t); if (c) n.className = c; return n; };
-  const BUILD = "2026-10-27b";
+  const BUILD = "2026-10-27c";
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const nat = (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
   const uid = () => Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7);
@@ -946,6 +947,11 @@
   $("#filePdf").onchange = onPick("pdf");
   $("#fileZip").onchange = onPick("zip");
   $("#fileImg").onchange = onPick("img");
+  $("#fileBak").onchange = (e) => {
+    const f = (e.target.files || [])[0];
+    e.target.value = "";
+    if (f) restoreDetails(f);
+  };
 
   function addSheet() {
     const scrim = el("div", "scrim");
@@ -1022,6 +1028,82 @@
     f.appendChild(input);
     f.onclick = (e) => { if (e.target !== input) input.focus(); };
     return f;
+  }
+
+  /* ============ library details backup ============ */
+  /* The pages themselves can always be imported again from the original
+     files. What cannot be redone by hand is the curation — tags, the reading
+     list, and how far into each book you had read — so that is what this
+     saves. It is a few kilobytes, and it restores by matching titles, so it
+     survives a re-import giving every book a new id. */
+
+  function exportDetails() {
+    const payload = {
+      kind: "paper-shelf-library",
+      version: 1,
+      build: BUILD,
+      savedAt: new Date().toISOString(),
+      books: books.map((b) => ({
+        title: b.title,
+        tags: b.tags || [],
+        queuedAt: b.queuedAt ?? null,
+        lastPage: b.lastPage || 0,
+        pageCount: b.pageCount || 0,
+        addedAt: b.addedAt || null,
+      })),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = el("a");
+    a.href = url;
+    a.download = "paper-shelf-library.json";
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    toast("Saved as paper-shelf-library.json", 4000);
+  }
+
+  async function restoreDetails(file) {
+    let data = null;
+    try {
+      data = JSON.parse(await file.text());
+    } catch (_) {
+      toast("That file could not be read");
+      return;
+    }
+    if (!data || data.kind !== "paper-shelf-library" || !Array.isArray(data.books)) {
+      toast("That is not a Paper Shelf backup");
+      return;
+    }
+
+    const byTitle = new Map(books.map((b) => [normTitle(b.title), b]));
+    let applied = 0;
+    const missing = [];
+    for (const rec of data.books) {
+      const b = byTitle.get(normTitle(rec.title || ""));
+      if (!b) { missing.push(rec.title || "Untitled"); continue; }
+      // Merge rather than overwrite: anything tagged since the backup stays.
+      b.tags = [...new Set([...(b.tags || []), ...(rec.tags || [])])];
+      if (rec.queuedAt != null) b.queuedAt = rec.queuedAt;
+      if ((rec.lastPage || 0) > (b.lastPage || 0)) b.lastPage = rec.lastPage;
+      await putBook(b);
+      applied++;
+    }
+    await reloadBooks();
+    render();
+    await choose({
+      title: "Details restored",
+      body: (applied === 1 ? "1 book updated." : applied + " books updated.") +
+        (missing.length
+          ? missing.length === 1
+            ? " 1 book in the backup is not on this shelf — import it and restore again."
+            : " " + missing.length + " books in the backup are not on this shelf — import them and restore again."
+          : ""),
+      names: missing.map((n) => n + " — not on this shelf"),
+      actions: [{ key: "ok", label: "Done" }],
+    });
   }
 
   /* ============ keyboard test ============ */
@@ -1593,6 +1675,28 @@
       mkSeg([["auto", "Auto"], ["light", "Light"], ["dark", "Dark"]], cfg.theme, (x) => { cfg.theme = x; applyTheme(); })));
     v.appendChild(c2);
 
+    const c5 = el("div", "card");
+    const t5 = el("div", "sect"); t5.style.margin = "0 0 8px"; t5.textContent = "Library details";
+    c5.appendChild(t5);
+    const bakNote = el("div");
+    bakNote.innerHTML =
+      "<small style='color:var(--muted)'>Saves your tags, reading list and places in books — " +
+      "not the pages, which you still have as files. Keep a copy before anything " +
+      "that might clear this app's storage.</small>";
+    c5.appendChild(bakNote);
+    const bakStack = el("div", "btnstack");
+    bakStack.style.maxWidth = "none";
+    bakStack.style.marginTop = "10px";
+    const saveBtn = el("button", "btn");
+    saveBtn.textContent = "Save library details";
+    saveBtn.disabled = !books.length;
+    saveBtn.onclick = exportDetails;
+    const loadBtn = el("button", "btn ghost");
+    loadBtn.textContent = "Restore from a saved file";
+    loadBtn.onclick = () => $("#fileBak").click();
+    bakStack.append(saveBtn, loadBtn);
+    c5.appendChild(bakStack);
+
     const c4 = el("div", "card");
     const t4 = el("div", "sect"); t4.style.margin = "0 0 8px"; t4.textContent = "This app";
     c4.appendChild(t4);
@@ -1611,6 +1715,7 @@
     const info = el("div");
     info.innerHTML = "<small style='color:var(--muted)'>Checking…</small>";
     c3.appendChild(info);
+    v.appendChild(c5);
     v.appendChild(c3);
     v.appendChild(c4);
 
