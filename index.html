@@ -479,7 +479,7 @@
   const IMG_EXT = /\.(jpe?g|png|gif|webp|bmp|avif)$/i;
   const $ = (s) => document.querySelector(s);
   const el = (t, c) => { const n = document.createElement(t); if (c) n.className = c; return n; };
-  const BUILD = "2026-10-27c";
+  const BUILD = "2026-10-27e";
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const nat = (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
   const uid = () => Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7);
@@ -1037,6 +1037,96 @@
      saves. It is a few kilobytes, and it restores by matching titles, so it
      survives a re-import giving every book a new id. */
 
+  function saveBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = el("a");
+    a.href = url;
+    a.download = filename;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // Long enough for the browser to have taken the bytes; revoking too soon
+    // cancels the save on some browsers.
+    setTimeout(() => URL.revokeObjectURL(url), 20000);
+  }
+
+  const fileSafe = (s) =>
+    (String(s || "book").replace(/[\\/:*?"<>|]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 80)) || "book";
+
+  /** Hand a whole book back as a file. A PDF book gives up the very file that
+      was imported; an image book is packed into a CBZ, which is what it came
+      from. Re-importing either one rebuilds the book exactly, so this is a
+      real backup and not a copy in a format only this app understands. */
+  async function exportBook(b) {
+    const name = fileSafe(b.title);
+    if (b.kind === "pdf") {
+      const blob = await getBlob("pdf:" + b.id);
+      if (!blob) return false;
+      saveBlob(blob, name + ".pdf");
+      return true;
+    }
+    const total = pageCount(b);
+    if (!total) return false;
+    const zip = new JSZip();
+    let packed = 0;
+    for (let i = 0; i < total; i++) {
+      const pg = await getBlob(pageKey(b.id, i));
+      if (!pg) continue;
+      zip.file(String(i + 1).padStart(4, "0") + ".jpg", pg);
+      packed++;
+      if (i % 20 === 19) {
+        setProgress("Packing " + name + ": page " + (i + 1) + " of " + total + "…");
+        await new Promise((r) => setTimeout(r, 0));
+      }
+    }
+    if (!packed) return false;
+    // STORE, not deflate: the pages are already compressed images, so
+    // compressing again costs time and memory and saves nothing.
+    const out = await zip.generateAsync({ type: "blob", compression: "STORE" });
+    saveBlob(out, name + ".cbz");
+    return true;
+  }
+
+  async function exportEverything() {
+    const pick = await choose({
+      title: "Save every book",
+      body: "Each book is saved as its own file, so no single file has to hold your " +
+        "whole library — a PDF stays a PDF, pages become a CBZ. Your browser may ask " +
+        "about each one. " + books.length + (books.length === 1 ? " book" : " books") +
+        ", plus the details file.",
+      actions: [{ key: "go", label: "Start saving" }, { key: "no", label: "Cancel", ghost: true }],
+    });
+    if (pick !== "go") return;
+
+    state.busy = true; render();
+    exportDetails();
+    let done = 0;
+    const failed = [];
+    for (let i = 0; i < books.length; i++) {
+      const b = books[i];
+      setProgress("Saving " + (i + 1) + " of " + books.length + ": " + b.title);
+      try {
+        if (await exportBook(b)) done++;
+        else failed.push(b.title);
+      } catch (_) {
+        failed.push(b.title);
+      }
+      // Give the browser room to take each file before offering the next.
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    setProgress(null);
+    state.busy = false; render();
+    await choose({
+      title: failed.length ? "Saved, with gaps" : "Saved",
+      body: (done === 1 ? "1 book saved." : done + " books saved.") +
+        (failed.length ? " " + failed.length + " could not be saved." : "") +
+        " Keep them together with the details file.",
+      names: failed.map((n) => n + " — could not be saved"),
+      actions: [{ key: "ok", label: "Done" }],
+    });
+  }
+
   function exportDetails() {
     const payload = {
       kind: "paper-shelf-library",
@@ -1052,16 +1142,8 @@
         addedAt: b.addedAt || null,
       })),
     };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = el("a");
-    a.href = url;
-    a.download = "paper-shelf-library.json";
-    a.style.display = "none";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    saveBlob(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }),
+      "paper-shelf-library.json");
     toast("Saved as paper-shelf-library.json", 4000);
   }
 
@@ -1451,6 +1533,22 @@
     q.textContent = b.queuedAt != null ? "Remove from reading list" : "Add to reading list";
     q.onclick = async () => { b.queuedAt = b.queuedAt != null ? null : Date.now(); await putBook(b); await reloadBooks(); render(); };
     acts.appendChild(q);
+
+    const sv = el("button", "btn ghost");
+    sv.textContent = b.kind === "pdf" ? "Save a copy as PDF" : "Save a copy as CBZ";
+    sv.disabled = !total;
+    sv.onclick = async () => {
+      sv.disabled = true;
+      try {
+        if (!(await exportBook(b))) toast("This book's pages could not be read back");
+      } catch (e) {
+        toast(e.message || "Could not save that book");
+      } finally {
+        setProgress(null);
+        sv.disabled = false;
+      }
+    };
+    acts.appendChild(sv);
     v.appendChild(acts);
 
     if (!total) {
@@ -1680,9 +1778,10 @@
     c5.appendChild(t5);
     const bakNote = el("div");
     bakNote.innerHTML =
-      "<small style='color:var(--muted)'>Saves your tags, reading list and places in books — " +
-      "not the pages, which you still have as files. Keep a copy before anything " +
-      "that might clear this app's storage.</small>";
+      "<small style='color:var(--muted)'><b>Details</b> is a small file holding your tags, " +
+      "reading list and places in books. <b>Every book</b> also saves each book itself, " +
+      "as the PDF or CBZ it came from, so you can rebuild the whole shelf from scratch. " +
+      "To restore: bring the book files back in with Import, then restore the details.</small>";
     c5.appendChild(bakNote);
     const bakStack = el("div", "btnstack");
     bakStack.style.maxWidth = "none";
@@ -1691,10 +1790,14 @@
     saveBtn.textContent = "Save library details";
     saveBtn.disabled = !books.length;
     saveBtn.onclick = exportDetails;
+    const allBtn = el("button", "btn ghost");
+    allBtn.textContent = "Save every book";
+    allBtn.disabled = !books.length || state.busy;
+    allBtn.onclick = exportEverything;
     const loadBtn = el("button", "btn ghost");
-    loadBtn.textContent = "Restore from a saved file";
+    loadBtn.textContent = "Restore details from a saved file";
     loadBtn.onclick = () => $("#fileBak").click();
-    bakStack.append(saveBtn, loadBtn);
+    bakStack.append(saveBtn, allBtn, loadBtn);
     c5.appendChild(bakStack);
 
     const c4 = el("div", "card");
@@ -1732,8 +1835,11 @@
           gb(est.usage || 0) + " used of about " + gb(est.quota || 0) + " available" +
           "</small><br><small style='color:var(--muted)'>" +
           (persisted
-            ? "This browser has marked your books as protected storage."
-            : "Add this page to your Home Screen to keep your books from being cleared.") +
+            ? "Protected storage: this browser will not clear your books to reclaim space, " +
+              "and will not clear them if you go a while without opening the app."
+            : "Not protected yet. This browser may clear your books after a stretch of not " +
+              "opening the app. It decides from how much you use the app, so open it now " +
+              "and then and check back — or keep a copy using Save library details above.") +
           "</small>";
       } catch (_) {
         line = "<small style='color:var(--muted)'>This browser will not report how much space is in use.</small>";
@@ -1918,6 +2024,11 @@
       return;
     }
     render();
+    /* Ask on every launch, not only when importing. Safari decides this from
+       how much the site is used, so a request it turned down once can be
+       granted later — and a grant is what exempts the books from being
+       cleared after a stretch of not opening the app. */
+    requestPersist();
   })();
 })();
 </script>
