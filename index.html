@@ -401,6 +401,24 @@
     color: var(--muted);
   }
   .sheet .names li { padding: 2px 0; overflow-wrap: anywhere; }
+  /* The keyboard test has to stay readable while the keyboard is up, so its
+     sheet sits at the top of the screen rather than the bottom. */
+  .scrim.top { align-items: flex-start; }
+  .diag {
+    margin: 0 0 12px;
+    padding: 10px 11px;
+    max-height: 30vh;
+    overflow: auto;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface-2);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--muted);
+  }
 
   .toast {
     position: fixed; left: 50%; bottom: calc(76px + env(safe-area-inset-bottom, 0px));
@@ -455,6 +473,7 @@
   const IMG_EXT = /\.(jpe?g|png|gif|webp|bmp|avif)$/i;
   const $ = (s) => document.querySelector(s);
   const el = (t, c) => { const n = document.createElement(t); if (c) n.className = c; return n; };
+  const BUILD = "2026-10-27a";
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const nat = (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
   const uid = () => Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7);
@@ -1000,6 +1019,98 @@
     return f;
   }
 
+  /* ============ keyboard test ============ */
+  /** A field that offers Paste but never raises the keyboard is a symptom that
+      cannot be reproduced away from the device, so this reports what the phone
+      actually does: which events arrive, whether the focus sticks, and whether
+      the keyboard ever changed the viewport height. Box B carries none of this
+      app's CSS, which separates a styling fault from the device's own doing. */
+  function keyboardTest() {
+    const scrim = el("div", "scrim top");
+    const sheet = el("div", "sheet");
+    sheet.innerHTML =
+      "<h3>Keyboard test</h3>" +
+      "<p>Tap box A, then box B. Note whether the keyboard comes up for each, " +
+      "then tap Copy report and send it to me.</p>";
+
+    const log = [];
+    const t0 = Date.now();
+    const out = el("pre", "diag");
+    const vv = window.visualViewport || null;
+    const vvStart = vv ? vv.height : 0;
+    let vvMin = vvStart;
+
+    function lines() {
+      const a = document.activeElement;
+      const shrank = vvStart - vvMin;
+      return [
+        "build " + BUILD,
+        "mode " + (matchMedia("(display-mode: standalone)").matches ? "home screen" : "browser tab") +
+          "  nav.standalone " + String(navigator.standalone),
+        "touchpoints " + (navigator.maxTouchPoints || 0),
+        vv ? "viewport " + Math.round(vvStart) + " now " + Math.round(vv.height) + " min " + Math.round(vvMin)
+           : "no visualViewport",
+        "keyboard " + (shrank > 80 ? "OPENED, viewport shrank " + Math.round(shrank) + "px" : "never seen"),
+        "focus " + (a ? a.tagName.toLowerCase() + (a.dataset && a.dataset.box ? " box " + a.dataset.box : "") : "none"),
+        "",
+        ...log.slice(-24),
+      ];
+    }
+    const paint = () => { out.textContent = lines().join("\n"); };
+
+    const watch = (input, name) => {
+      input.dataset.box = name;
+      ["pointerdown", "touchstart", "mousedown", "click", "focus", "blur", "keydown", "input"]
+        .forEach((ev) => input.addEventListener(ev, () => {
+          log.push(("     " + (Date.now() - t0)).slice(-6) + "ms  " + name + "  " + ev);
+          paint();
+        }, { passive: true }));
+    };
+
+    const a = el("input");
+    a.type = "text";
+    a.placeholder = "Box A — this app's field";
+    a.autocomplete = "off";
+    const fa = fieldRow(a);
+    watch(a, "A");
+
+    const b = document.createElement("input");
+    b.type = "text";
+    b.placeholder = "Box B — no styling at all";
+    b.setAttribute("style", "all: revert; display: block; width: 100%; font-size: 16px; padding: 10px; margin: 0 0 12px;");
+    watch(b, "B");
+
+    const onVV = () => { vvMin = Math.min(vvMin, vv.height); paint(); };
+    if (vv) vv.addEventListener("resize", onVV);
+
+    const stack = el("div", "btnstack");
+    const copy = el("button", "btn");
+    copy.textContent = "Copy report";
+    copy.onclick = async () => {
+      const text = lines().join("\n") + "\nUA " + navigator.userAgent;
+      try {
+        await navigator.clipboard.writeText(text);
+        toast("Report copied");
+      } catch (_) {
+        const r = document.createRange();
+        r.selectNodeContents(out);
+        const sel = getSelection();
+        sel.removeAllRanges();
+        sel.addRange(r);
+        toast("Copying was blocked — the report is selected, copy it by hand");
+      }
+    };
+    const done = el("button", "btn ghost");
+    done.textContent = "Done";
+    done.onclick = () => { if (vv) vv.removeEventListener("resize", onVV); scrim.remove(); };
+    stack.append(copy, done);
+
+    sheet.append(fa, b, out, stack);
+    scrim.appendChild(sheet);
+    document.body.appendChild(scrim);
+    paint();
+  }
+
   /* ============ views ============ */
   function render() {
     const v = $("#view");
@@ -1476,6 +1587,18 @@
       mkSeg([["auto", "Auto"], ["light", "Light"], ["dark", "Dark"]], cfg.theme, (x) => { cfg.theme = x; applyTheme(); })));
     v.appendChild(c2);
 
+    const c4 = el("div", "card");
+    const t4 = el("div", "sect"); t4.style.margin = "0 0 8px"; t4.textContent = "This app";
+    c4.appendChild(t4);
+    const ver = el("div");
+    ver.innerHTML = "<small style='color:var(--muted)'>Build " + esc(BUILD) + "</small>";
+    c4.appendChild(ver);
+    const kbBtn = el("button", "btn ghost");
+    kbBtn.textContent = "Keyboard test";
+    kbBtn.style.marginTop = "10px";
+    kbBtn.onclick = keyboardTest;
+    c4.appendChild(kbBtn);
+
     const c3 = el("div", "card");
     const t3 = el("div", "sect"); t3.style.margin = "0 0 8px"; t3.textContent = "Storage";
     c3.appendChild(t3);
@@ -1483,6 +1606,7 @@
     info.innerHTML = "<small style='color:var(--muted)'>Checking…</small>";
     c3.appendChild(info);
     v.appendChild(c3);
+    v.appendChild(c4);
 
     (async () => {
       let line = "";
