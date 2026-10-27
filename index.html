@@ -479,7 +479,7 @@
   const IMG_EXT = /\.(jpe?g|png|gif|webp|bmp|avif)$/i;
   const $ = (s) => document.querySelector(s);
   const el = (t, c) => { const n = document.createElement(t); if (c) n.className = c; return n; };
-  const BUILD = "2026-10-27e";
+  const BUILD = "2026-10-27f";
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const nat = (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
   const uid = () => Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7);
@@ -753,25 +753,45 @@
 
   /** Flag anything whose name is already on the shelf. An import that quietly
       drops a file is invisible otherwise — re-picking the batch is how you
-      find the gap without checking every book by hand. */
+      find the gap without checking every book by hand.
+
+      Two quite different things get caught here and they are kept apart: a
+      name that matches a book already on the shelf, and a name that repeats
+      inside this one pick. Reporting the second as "already on your shelf"
+      is misleading, and it hides the real story, which is that the files you
+      chose do not have the distinct names you expected. */
   async function screenPicked(kind, files) {
     if (kind === "img") return { files, dup: [] };   // the whole pick is one book
-    const have = new Set(books.map((b) => normTitle(b.title)));
+    const have = new Set(books.map((b) => normTitle(b.title || "")));
     const seen = new Set();
-    const fresh = [], dup = [];
+    const fresh = [], onShelf = [], inBatch = [];
     for (const f of files) {
       const key = normTitle(titleOf(f.name));
-      if (have.has(key) || seen.has(key)) dup.push(f);
+      if (have.has(key)) onShelf.push(f);
+      else if (seen.has(key)) inBatch.push(f);
       else { seen.add(key); fresh.push(f); }
     }
-    if (!dup.length) return { files, dup: [] };
+    const dupCount = onShelf.length + inBatch.length;
+    if (!dupCount) return { files, dup: [] };
+
+    const parts = [];
+    if (onShelf.length) parts.push(onShelf.length + (onShelf.length === 1 ? " is" : " are") + " already on your shelf");
+    if (inBatch.length) parts.push(inBatch.length + " repeat a name used earlier in this same pick");
+    const names = [
+      ...onShelf.map((f) => f.name + " — already on your shelf"),
+      ...inBatch.map((f) => f.name + " — same name as another file you just picked"),
+    ];
 
     const pick = await choose({
-      title: dup.length === 1 ? "1 of these is already on your shelf" : dup.length + " of these are already on your shelf",
-      body: fresh.length
-        ? "Matched by name. Skipping them imports the " + (fresh.length === 1 ? "1 that is new." : fresh.length + " that are new.")
-        : "Every file you picked matches a book you already have.",
-      names: dup.map((f) => f.name),
+      title: dupCount + " of these " + (dupCount === 1 ? "has" : "have") + " a name already in use",
+      body: "Of the " + files.length + " you picked, " + parts.join(", ") + ". " +
+        (fresh.length
+          ? "Skipping them imports the " + (fresh.length === 1 ? "1 that is new." : fresh.length + " that are new.")
+          : "That leaves nothing new to import.") +
+        (inBatch.length
+          ? " Books are matched by filename, so files sharing a name cannot be told apart."
+          : ""),
+      names,
       actions: [
         ...(fresh.length
           ? [{ key: "fresh", label: fresh.length === 1 ? "Skip these, import the 1 new one" : "Skip these, import the other " + fresh.length }]
@@ -781,8 +801,49 @@
       ],
     });
     if (pick === "all") return { files, dup: [] };
-    if (pick === "fresh") return { files: fresh, dup: dup.map((f) => f.name) };
+    if (pick === "fresh") return { files: fresh, dup: [...onShelf, ...inBatch].map((f) => f.name) };
     return null;
+  }
+
+  /* An import that is killed part way through cannot report anything — the
+     page is gone with it. So the plan is written down before it starts and
+     ticked off as it goes. A journal still sitting there at the next launch
+     means the import never finished, and the app can then say exactly which
+     files never made it. This is what makes a silent partial import visible. */
+  const JOURNAL_KEY = "import-journal";
+
+  async function journalWrite(j) {
+    try { await putBlob(JOURNAL_KEY, new Blob([JSON.stringify(j)], { type: "application/json" })); } catch (_) {}
+  }
+  async function journalRead() {
+    try {
+      const b = await getBlob(JOURNAL_KEY);
+      return b ? JSON.parse(await b.text()) : null;
+    } catch (_) { return null; }
+  }
+  async function journalClear() {
+    try { await rq(store("blobs", "readwrite").delete(JOURNAL_KEY)); } catch (_) {}
+  }
+
+  /** Called once at startup, before the shelf is drawn. */
+  async function reportUnfinishedImport() {
+    const j = await journalRead();
+    if (!j) return;
+    await journalClear();
+    const accounted = new Set([...(j.added || []), ...(j.failed || [])]);
+    const never = (j.planned || []).filter((n) => !accounted.has(n));
+    if (!never.length && !(j.failed || []).length) return;
+    await choose({
+      title: "Your last import did not finish",
+      body: "It stopped after " + (j.added || []).length + " of " + (j.planned || []).length +
+        ". Running out of memory on a large batch is the usual cause — pick these again, " +
+        "in smaller groups, and the shelf will fill in the gaps.",
+      names: [
+        ...never.map((n) => n + " — never got started"),
+        ...(j.failed || []).map((n) => n + " — could not be imported"),
+      ],
+      actions: [{ key: "ok", label: "Done" }],
+    });
   }
 
   async function requestPersist() {
@@ -828,8 +889,11 @@
         try { if (doc) await doc.destroy(); } catch (_) {}
         if (c) { c.width = 0; c.height = 0; }
         doc = null; page = null; c = null;
-        // Yield so the browser can actually reclaim it, and repaint.
-        await new Promise((r) => setTimeout(r, 60));
+        if (report.tick) await report.tick();
+        // Yield so the browser can actually reclaim it, and repaint. Every
+        // tenth file gets a longer breath: Safari's collector lags behind a
+        // run of large files, and that lag is what kills the tab.
+        await new Promise((r) => setTimeout(r, i % 10 === 9 ? 600 : 120));
       }
     }
   }
@@ -864,6 +928,8 @@
         await deleteBook(id).catch(() => {});
         report.failed.push({ name: f.name, why: "could not be opened" });
       }
+      if (report.tick) await report.tick();
+      await new Promise((r) => setTimeout(r, 120));
     }
   }
 
@@ -893,6 +959,14 @@
     if (!screened || !screened.files.length) return;
 
     const report = { added: [], dup: screened.dup, failed: [] };
+    const planned = screened.files.map((f) => f.name);
+    await journalWrite({ at: Date.now(), kind, planned, added: [], failed: [] });
+    report.tick = () => journalWrite({
+      at: Date.now(), kind, planned,
+      added: report.added.slice(),
+      failed: report.failed.map((f) => f.name),
+    });
+
     state.busy = true; render();
     await requestPersist();
     try {
@@ -903,6 +977,7 @@
       report.failed.push({ name: "The import", why: e.message || "stopped unexpectedly" });
     } finally {
       setProgress(null);
+      await journalClear();
       // Books that finished are already saved, so show them whatever happened.
       try { await reloadBooks(); } catch (_) {}
     }
@@ -2024,6 +2099,8 @@
       return;
     }
     render();
+    // Before anything else: say so if the last import was cut short.
+    reportUnfinishedImport();
     /* Ask on every launch, not only when importing. Safari decides this from
        how much the site is used, so a request it turned down once can be
        granted later — and a grant is what exempts the books from being
