@@ -166,6 +166,20 @@
 
   /* ---------- controls ---------- */
   .searchrow { display: flex; gap: 8px; margin-bottom: 12px; }
+
+  /* The book screen's Back and Remove stay put while the page thumbnails
+     scroll past. Negative margins pull it out to the scroller's edges so
+     nothing slides through beside it. */
+  .detailbar {
+    position: sticky;
+    top: 0;
+    z-index: 15;
+    margin: -16px -16px 12px;
+    padding: 12px 16px;
+    background: color-mix(in srgb, var(--bg) 90%, transparent);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--line);
+  }
   .field {
     flex: 1;
     min-width: 0;
@@ -371,6 +385,21 @@
   .sheet h3 { font-family: var(--display); font-weight: 600; font-size: 18px; margin: 0 0 4px; }
   .sheet p { margin: 0 0 14px; color: var(--muted); font-size: 13.5px; }
   .sheet .btnstack { max-width: none; margin-top: 0; }
+  .sheet .names {
+    margin: 0 0 14px;
+    padding: 8px 11px;
+    list-style: none;
+    max-height: 34vh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface-2);
+    font-size: 12.5px;
+    line-height: 1.45;
+    color: var(--muted);
+  }
+  .sheet .names li { padding: 2px 0; overflow-wrap: anywhere; }
 
   .toast {
     position: fixed; left: 50%; bottom: calc(76px + env(safe-area-inset-bottom, 0px));
@@ -527,8 +556,19 @@
   const urlCache = new Map();   // blob key -> object URL
   const pdfCache = new Map();   // book id -> pdf.js document
   const countCache = new Map(); // book id -> page count
+  const cardCache = new Map();  // book id -> its rendered shelf card
 
-  /** Object URLs keep their blob alive, so the cache is capped and oldest-out. */
+  /** The single place `books` is refreshed, so the shelf cards built from it
+      are always thrown away at the same time. */
+  async function reloadBooks() {
+    books = await getBooks();
+    cardCache.clear();
+  }
+
+  /** Object URLs keep their blob alive, so the cache is capped and oldest-out.
+      Covers are exempt. There is one per book, they are small, and a long
+      book's page thumbnails are numerous enough to evict every cover — which
+      left the shelf re-reading all of them from storage on its next redraw. */
   const URL_CACHE_MAX = 240;
 
   async function blobUrl(key) {
@@ -537,10 +577,13 @@
     if (!b) return null;
     const u = URL.createObjectURL(b);
     urlCache.set(key, u);
-    while (urlCache.size > URL_CACHE_MAX) {
-      const oldest = urlCache.keys().next().value;
-      URL.revokeObjectURL(urlCache.get(oldest));
-      urlCache.delete(oldest);
+    let over = urlCache.size - URL_CACHE_MAX;
+    for (const k of urlCache.keys()) {
+      if (over <= 0) break;
+      if (k.startsWith("cv:")) continue;
+      URL.revokeObjectURL(urlCache.get(k));
+      urlCache.delete(k);
+      over--;
     }
     return u;
   }
@@ -654,8 +697,67 @@
     });
   }
 
+  /** Like `ask`, but it can list filenames and offer several ways forward.
+      Resolves with the chosen action's key, or null if it was dismissed. */
+  function choose({ title, body, names = [], actions }) {
+    return new Promise((resolve) => {
+      const scrim = el("div", "scrim");
+      const sheet = el("div", "sheet");
+      sheet.innerHTML =
+        "<h3>" + esc(title) + "</h3><p>" + esc(body) + "</p>" +
+        (names.length ? '<ul class="names">' + names.map((n) => "<li>" + esc(n) + "</li>").join("") + "</ul>" : "") +
+        '<div class="btnstack">' +
+        actions.map((a) =>
+          '<button class="btn' + (a.ghost ? " ghost" : "") + '" data-key="' + esc(a.key) + '">' +
+          esc(a.label) + "</button>").join("") +
+        "</div>";
+      scrim.appendChild(sheet);
+      const done = (v) => { scrim.remove(); resolve(v); };
+      sheet.querySelectorAll("[data-key]").forEach((btn) => { btn.onclick = () => done(btn.dataset.key); });
+      scrim.onclick = (e) => { if (e.target === scrim) done(null); };
+      document.body.appendChild(scrim);
+      const first = sheet.querySelector("[data-key]");
+      if (first) first.focus();
+    });
+  }
+
   /* ============ import ============ */
   const titleOf = (name) => (name.split(/[\\/]/).pop() || name).replace(/\.[^.]+$/, "").trim() || "Untitled";
+  const normTitle = (t) => t.toLowerCase().replace(/\s+/g, " ").trim();
+
+  /** Flag anything whose name is already on the shelf. An import that quietly
+      drops a file is invisible otherwise — re-picking the batch is how you
+      find the gap without checking every book by hand. */
+  async function screenPicked(kind, files) {
+    if (kind === "img") return { files, dup: [] };   // the whole pick is one book
+    const have = new Set(books.map((b) => normTitle(b.title)));
+    const seen = new Set();
+    const fresh = [], dup = [];
+    for (const f of files) {
+      const key = normTitle(titleOf(f.name));
+      if (have.has(key) || seen.has(key)) dup.push(f);
+      else { seen.add(key); fresh.push(f); }
+    }
+    if (!dup.length) return { files, dup: [] };
+
+    const pick = await choose({
+      title: dup.length === 1 ? "1 of these is already on your shelf" : dup.length + " of these are already on your shelf",
+      body: fresh.length
+        ? "Matched by name. Skipping them imports the " + (fresh.length === 1 ? "1 that is new." : fresh.length + " that are new.")
+        : "Every file you picked matches a book you already have.",
+      names: dup.map((f) => f.name),
+      actions: [
+        ...(fresh.length
+          ? [{ key: "fresh", label: fresh.length === 1 ? "Skip these, import the 1 new one" : "Skip these, import the other " + fresh.length }]
+          : []),
+        { key: "all", label: "Import all " + files.length + " anyway", ghost: true },
+        { key: "cancel", label: "Cancel", ghost: true },
+      ],
+    });
+    if (pick === "all") return { files, dup: [] };
+    if (pick === "fresh") return { files: fresh, dup: dup.map((f) => f.name) };
+    return null;
+  }
 
   async function requestPersist() {
     try {
@@ -665,8 +767,7 @@
     } catch (_) {}
   }
 
-  async function importPdfs(files) {
-    let ok = 0;
+  async function importPdfs(files, report) {
     await initPdf();
     for (let i = 0; i < files.length; i++) {
       const f = files[i];
@@ -688,10 +789,10 @@
         const cover = await new Promise((r) => c.toBlob(r, "image/jpeg", .82));
         if (cover) await putBlob("cv:" + id, cover);
         await putBook({ id, kind: "pdf", title: titleOf(f.name), pageCount: n, addedAt: Date.now(), tags: [], queuedAt: null, lastPage: 0 });
-        ok++;
+        report.added.push(f.name);
       } catch (e) {
         await deleteBook(id).catch(() => {});
-        toast("Could not read " + f.name);
+        report.failed.push({ name: f.name, why: "could not be read as a PDF" });
       } finally {
         /* Hand back every byte before starting the next file. A PDF left open
            keeps its parsed pages and its whole buffer alive, so importing a
@@ -705,11 +806,9 @@
         await new Promise((r) => setTimeout(r, 60));
       }
     }
-    return ok;
   }
 
-  async function importZips(files) {
-    let ok = 0;
+  async function importZips(files, report) {
     for (let fi = 0; fi < files.length; fi++) {
       const f = files[fi];
       const id = uid();
@@ -720,7 +819,7 @@
         const names = Object.keys(zip.files)
           .filter((n) => !zip.files[n].dir && !n.includes("__MACOSX") && IMG_EXT.test(n))
           .sort(nat);
-        if (!names.length) { toast("No images inside " + f.name); continue; }
+        if (!names.length) { report.failed.push({ name: f.name, why: "no images inside the archive" }); continue; }
         for (let i = 0; i < names.length; i++) {
           await putBlob(pageKey(id, i), await zip.files[names[i]].async("blob"));
           // Drop the decompressed copy and let the browser breathe; a long
@@ -734,16 +833,15 @@
         const first = await getBlob(pageKey(id, 0));
         if (first) await putBlob("cv:" + id, first);
         await putBook({ id, kind: "images", title: titleOf(f.name), pageCount: names.length, addedAt: Date.now(), tags: [], queuedAt: null, lastPage: 0 });
-        ok++;
+        report.added.push(f.name);
       } catch (e) {
         await deleteBook(id).catch(() => {});
-        toast("Could not open " + f.name);
+        report.failed.push({ name: f.name, why: "could not be opened" });
       }
     }
-    return ok;
   }
 
-  async function importImages(files) {
+  async function importImages(files, report) {
     const id = uid();
     try {
       const list = [...files].sort((a, b) => nat(a.name, b.name));
@@ -754,33 +852,60 @@
         title: "Images " + new Date().toISOString().slice(0, 10),
         pageCount: list.length, addedAt: Date.now(), tags: [], queuedAt: null, lastPage: 0,
       });
-      return 1;
+      report.added.push(list.length + " photos");
     } catch (e) {
       await deleteBook(id).catch(() => {});
-      toast("Could not import those photos");
-      return 0;
+      report.failed.push({ name: "Those photos", why: "could not be imported" });
     }
   }
 
   async function runImport(kind, files) {
     if (!files || !files.length) return;
+
+    // Ask about anything already on the shelf before touching storage.
+    const screened = await screenPicked(kind, files);
+    if (!screened || !screened.files.length) return;
+
+    const report = { added: [], dup: screened.dup, failed: [] };
     state.busy = true; render();
     await requestPersist();
-    let n = 0;
     try {
-      if (kind === "pdf") n = await importPdfs(files);
-      else if (kind === "zip") n = await importZips(files);
-      else n = await importImages(files);
+      if (kind === "pdf") await importPdfs(screened.files, report);
+      else if (kind === "zip") await importZips(screened.files, report);
+      else await importImages(screened.files, report);
     } catch (e) {
-      toast(e.message || "Import failed");
+      report.failed.push({ name: "The import", why: e.message || "stopped unexpectedly" });
     } finally {
       setProgress(null);
       // Books that finished are already saved, so show them whatever happened.
-      try { books = await getBooks(); } catch (_) {}
+      try { await reloadBooks(); } catch (_) {}
     }
     state.busy = false;
     render();
-    if (n) toast(n === 1 ? "Added 1 book" : "Added " + n + " books");
+    await reportImport(report);
+  }
+
+  /** Anything skipped or failed stays on screen until it is dismissed. A
+      toast cannot do that job: each one replaces the last, so in a batch of
+      fifty the failures flash past unread. */
+  async function reportImport(report) {
+    const { added, dup, failed } = report;
+    if (!dup.length && !failed.length) {
+      if (added.length) toast(added.length === 1 ? "Added 1 book" : "Added " + added.length + " books");
+      return;
+    }
+    const lines = [!added.length ? "Nothing new was added." : added.length === 1 ? "1 book added." : added.length + " books added."];
+    if (dup.length) lines.push(dup.length === 1 ? "1 skipped as already on your shelf." : dup.length + " skipped as already on your shelf.");
+    if (failed.length) lines.push(failed.length === 1 ? "1 could not be imported." : failed.length + " could not be imported.");
+    await choose({
+      title: failed.length ? "Import finished with gaps" : "Import finished",
+      body: lines.join(" "),
+      names: [
+        ...failed.map((f) => f.name + " \u2014 " + f.why),
+        ...dup.map((n) => n + " \u2014 already on your shelf"),
+      ],
+      actions: [{ key: "ok", label: "Done" }],
+    });
   }
 
   /* Copy the FileList into a real array BEFORE resetting the input. Clearing
@@ -948,25 +1073,35 @@
   }
 
   function fillShelf(grid, list) {
-    grid.innerHTML = "";
     if (!list.length) {
+      grid.innerHTML = "";
       const e = el("div", "empty");
       e.innerHTML = "<p>Nothing matches that search.</p>";
       e.style.gridColumn = "1 / -1";
       grid.appendChild(e);
       return;
     }
-    list.forEach((b) => {
-      const card = el("button", "vol");
-      card.appendChild(coverNode(b, { progress: true, queued: true }));
-      const t = el("div", "t"); t.textContent = b.title;
-      const s = el("div", "s");
-      const n = pageCount(b);
-      s.textContent = b.lastPage > 0 && n ? "Page " + (b.lastPage + 1) + " of " + n : n ? n + " pages" : "—";
-      card.append(t, s);
-      card.onclick = () => { state.detail = b.id; render(); $("#main").scrollTop = 0; };
-      grid.appendChild(card);
-    });
+    /* Reuse each book's card and only move it. Rebuilding them meant reading
+       every cover back out of storage and minting a fresh object URL for each
+       one on every keystroke, which is what made the search box unusable once
+       the shelf held more than a handful of books. Appending a node that is
+       already in the document moves it, so the loaded covers survive. */
+    grid.replaceChildren(...list.map(shelfCard));
+  }
+
+  function shelfCard(b) {
+    const cached = cardCache.get(b.id);
+    if (cached) return cached;
+    const card = el("button", "vol");
+    card.appendChild(coverNode(b, { progress: true, queued: true }));
+    const t = el("div", "t"); t.textContent = b.title;
+    const s = el("div", "s");
+    const n = pageCount(b);
+    s.textContent = b.lastPage > 0 && n ? "Page " + (b.lastPage + 1) + " of " + n : n ? n + " pages" : "—";
+    card.append(t, s);
+    card.onclick = () => { state.detail = b.id; render(); $("#main").scrollTop = 0; };
+    cardCache.set(b.id, card);
+    return card;
   }
 
   /** Keep focus in the search box while typing. */
@@ -1014,7 +1149,7 @@
         mk("Move up", '<path d="M6 15l6-6 6 6"/>', i === 0, async () => { await swapQueue(b, list[i - 1]); }),
         mk("Move down", '<path d="M6 9l6 6 6-6"/>', i === list.length - 1, async () => { await swapQueue(b, list[i + 1]); }),
         mk("Remove from reading list", '<path d="M6 3h12v18l-6-4.5L6 21z" fill="currentColor" stroke="none"/>', false, async () => {
-          b.queuedAt = null; await putBook(b); books = await getBooks(); render();
+          b.queuedAt = null; await putBook(b); await reloadBooks(); render();
         })
       );
       r.append(n, cov, d, ctl);
@@ -1026,20 +1161,28 @@
   async function swapQueue(a, b) {
     const t = a.queuedAt; a.queuedAt = b.queuedAt; b.queuedAt = t;
     await putBook(a); await putBook(b);
-    books = await getBooks();
+    await reloadBooks();
     render();
+  }
+
+  /** Leaving a book always lands at the top of the shelf. Without this the
+      scroller keeps whatever offset the book screen was left at. */
+  function closeDetail() {
+    state.detail = null;
+    render();
+    $("#main").scrollTop = 0;
   }
 
   function viewDetail(v) {
     const b = books.find((x) => x.id === state.detail);
-    if (!b) { state.detail = null; return render(); }
+    if (!b) return closeDetail();
     const total = pageCount(b);
 
-    const bar = el("div", "searchrow");
+    const bar = el("div", "searchrow detailbar");
     const back = el("button", "iconbtn");
     back.setAttribute("aria-label", "Back to shelf");
     back.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>';
-    back.onclick = () => { state.detail = null; render(); };
+    back.onclick = closeDetail;
     const sp = el("div"); sp.style.flex = "1";
     const del = el("button", "iconbtn");
     del.setAttribute("aria-label", "Remove from library");
@@ -1053,9 +1196,8 @@
       });
       if (!yes) return;
       await deleteBook(b.id);
-      books = await getBooks();
-      state.detail = null;
-      render();
+      await reloadBooks();
+      closeDetail();
       toast("Removed");
     };
     bar.append(back, sp, del);
@@ -1091,7 +1233,7 @@
     }
     const q = el("button", "btn ghost");
     q.textContent = b.queuedAt != null ? "Remove from reading list" : "Add to reading list";
-    q.onclick = async () => { b.queuedAt = b.queuedAt != null ? null : Date.now(); await putBook(b); books = await getBooks(); render(); };
+    q.onclick = async () => { b.queuedAt = b.queuedAt != null ? null : Date.now(); await putBook(b); await reloadBooks(); render(); };
     acts.appendChild(q);
     v.appendChild(acts);
 
@@ -1109,7 +1251,7 @@
       const c = el("button", "chip del");
       c.innerHTML = esc(t) + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 5l14 14M19 5L5 19"/></svg>';
       c.setAttribute("aria-label", "Remove tag " + t);
-      c.onclick = async () => { b.tags = b.tags.filter((x) => x !== t); await putBook(b); books = await getBooks(); render(); };
+      c.onclick = async () => { b.tags = b.tags.filter((x) => x !== t); await putBook(b); await reloadBooks(); render(); };
       cr.appendChild(c);
     });
     if (!(b.tags || []).length) {
@@ -1133,7 +1275,7 @@
       const val = ti.value.trim();
       if (!val) return;
       const have = (b.tags || []).some((x) => x.toLowerCase() === val.toLowerCase());
-      if (!have) { b.tags = [...(b.tags || []), val]; await putBook(b); books = await getBooks(); }
+      if (!have) { b.tags = [...(b.tags || []), val]; await putBook(b); await reloadBooks(); }
       ti.value = "";
       render();
     };
@@ -1263,7 +1405,7 @@
     const close = () => scrim.remove();
     ok.onclick = async () => {
       const val = inp.value.trim();
-      if (val) { b.title = val; await putBook(b); books = await getBooks(); }
+      if (val) { b.title = val; await putBook(b); await reloadBooks(); }
       close(); render();
     };
     no.onclick = close;
@@ -1516,8 +1658,9 @@
   (async () => {
     try {
       db = await openDB();
-      books = await getBooks();
+      await reloadBooks();
     } catch (e) {
+      console.error(e);
       const v = $("#view");
       v.innerHTML =
         '<div class="empty"><h2>Storage is unavailable</h2>' +
