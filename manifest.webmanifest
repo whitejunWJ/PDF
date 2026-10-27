@@ -1,0 +1,11 @@
+{
+  "name": "Paper Shelf",
+  "short_name": "Paper Shelf",
+  "description": "A personal shelf for PDFs, CBZ archives and photo books, stored on your own device.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#e9ebee",
+  "theme_color": "#1f7a73"
+}

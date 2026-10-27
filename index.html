@@ -3,7 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<!-- Launched from the iOS Home Screen, these make it open full screen with no browser chrome. -->
+<!-- The manifest is the modern way to be an installed app. The apple- meta
+     tags below are the legacy path, kept for older iOS; with only those, iOS
+     runs the app in a mode where navigator.standalone is true but
+     display-mode: standalone does not match, and that mode has long-standing
+     keyboard faults. -->
+<link rel="manifest" href="manifest.webmanifest">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -473,7 +478,7 @@
   const IMG_EXT = /\.(jpe?g|png|gif|webp|bmp|avif)$/i;
   const $ = (s) => document.querySelector(s);
   const el = (t, c) => { const n = document.createElement(t); if (c) n.className = c; return n; };
-  const BUILD = "2026-10-27a";
+  const BUILD = "2026-10-27b";
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const nat = (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
   const uid = () => Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7);
@@ -1047,6 +1052,7 @@
         "build " + BUILD,
         "mode " + (matchMedia("(display-mode: standalone)").matches ? "home screen" : "browser tab") +
           "  nav.standalone " + String(navigator.standalone),
+        "manifest " + (document.querySelector('link[rel="manifest"]') ? "linked" : "MISSING"),
         "touchpoints " + (navigator.maxTouchPoints || 0),
         vv ? "viewport " + Math.round(vvStart) + " now " + Math.round(vv.height) + " min " + Math.round(vvMin)
            : "no visualViewport",
