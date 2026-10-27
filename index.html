@@ -10,11 +10,10 @@
 <meta name="apple-mobile-web-app-title" content="Paper Shelf">
 <meta name="theme-color" content="#1f7a73">
 <style>
-  :root {
-    color-scheme: light;
-    padding-top: env(safe-area-inset-top, 0px);
-    padding-bottom: env(safe-area-inset-bottom, 0px);
-  }
+  /* No safe-area padding here. The app's own header and tab bar already keep
+     clear of the notch and the home indicator; padding the root as well
+     counted both insets twice. */
+  :root { color-scheme: light; }
   img { max-width: 100%; }
   [hidden] { display: none !important; }
 </style>
@@ -104,12 +103,13 @@
 
   .topbar {
     position: sticky;
-    top: env(safe-area-inset-top, 0px);
+    top: 0;
     z-index: 20;
     display: flex;
     align-items: center;
     gap: 10px;
     padding: 12px 16px;
+    padding-top: calc(12px + env(safe-area-inset-top, 0px));
     background: color-mix(in srgb, var(--bg) 88%, transparent);
     backdrop-filter: blur(12px);
     border-bottom: 1px solid var(--line);
@@ -136,7 +136,7 @@
   .iconbtn:hover { border-color: var(--accent); }
   .iconbtn svg { width: 19px; height: 19px; }
 
-  main { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  main { flex: 1; overflow-y: auto; }
   .wrap { padding: 16px; padding-block: 16px 28px; max-width: 920px; margin: 0 auto; }
 
   .tabbar {
@@ -202,6 +202,8 @@
     padding: 10px 0;
   }
   .field input:focus { outline: none; }
+  /* 16px exactly: anything smaller and iOS zooms the page in on focus. */
+  .field input { font-size: 16px; }
 
   .hint { color: var(--muted); font-size: 12px; margin: -4px 0 12px; }
 
@@ -391,7 +393,6 @@
     list-style: none;
     max-height: 34vh;
     overflow-y: auto;
-    -webkit-overflow-scrolling: touch;
     border: 1px solid var(--line);
     border-radius: 10px;
     background: var(--surface-2);
@@ -987,6 +988,18 @@
     return d;
   }
 
+  /** A bordered input row. Deliberately a div and not a label: on iOS a
+      label wrapping its own control re-dispatches the tap onto that control,
+      and the synthesised second tap can take the focus straight back off, so
+      the keyboard never appears. Tapping the row focuses the input instead. */
+  function fieldRow(input, iconSvg) {
+    const f = el("div", "field");
+    if (iconSvg) f.insertAdjacentHTML("afterbegin", iconSvg);
+    f.appendChild(input);
+    f.onclick = (e) => { if (e.target !== input) input.focus(); };
+    return f;
+  }
+
   /* ============ views ============ */
   function render() {
     const v = $("#view");
@@ -1017,17 +1030,21 @@
     }
 
     const row = el("div", "searchrow");
-    const f = el("label", "field");
-    f.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>';
     const inp = el("input");
     inp.id = "searchInput";
-    inp.type = "search";
+    // A plain text field, not type="search": iOS gives that one its own
+    // clear button and keyboard treatment and it behaves less predictably.
+    inp.type = "text";
     inp.placeholder = "Search titles and tags";
     inp.value = state.q;
     inp.autocomplete = "off";
+    inp.autocapitalize = "none";
+    inp.setAttribute("autocorrect", "off");
+    inp.spellcheck = false;
+    inp.enterKeyHint = "search";
     inp.oninput = () => { state.q = inp.value; redrawShelfOnly(); };
-    f.appendChild(inp);
-    row.appendChild(f);
+    row.appendChild(fieldRow(inp,
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>'));
     v.appendChild(row);
 
     const hint = el("p", "hint");
@@ -1262,12 +1279,11 @@
     v.appendChild(cr);
 
     const te = el("div", "tagedit");
-    const tf = el("label", "field");
     const ti = el("input");
     ti.placeholder = "Add a tag";
     ti.autocapitalize = "none";
     ti.autocomplete = "off";
-    tf.appendChild(ti);
+    const tf = fieldRow(ti);
     const addT = el("button", "btn");
     addT.textContent = "Add";
     addT.style.flex = "none";
@@ -1392,10 +1408,9 @@
     const scrim = el("div", "scrim");
     const sheet = el("div", "sheet");
     sheet.innerHTML = "<h3>Rename book</h3>";
-    const f = el("label", "field");
     const inp = el("input");
     inp.value = b.title;
-    f.appendChild(inp);
+    const f = fieldRow(inp);
     const stack = el("div", "btnstack");
     const ok = el("button", "btn"); ok.textContent = "Save";
     const no = el("button", "btn ghost"); no.textContent = "Cancel";
