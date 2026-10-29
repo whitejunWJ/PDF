@@ -479,7 +479,7 @@
   const IMG_EXT = /\.(jpe?g|png|gif|webp|bmp|avif)$/i;
   const $ = (s) => document.querySelector(s);
   const el = (t, c) => { const n = document.createElement(t); if (c) n.className = c; return n; };
-  const BUILD = "2026-10-27f";
+  const BUILD = "2026-10-29a";
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const nat = (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
   const uid = () => Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7);
@@ -1112,11 +1112,29 @@
      saves. It is a few kilobytes, and it restores by matching titles, so it
      survives a re-import giving every book a new id. */
 
-  function saveBlob(blob, filename) {
-    const url = URL.createObjectURL(blob);
+  /** Hand a file to the phone.
+
+      A download link does not work on iOS: Safari ignores the `download`
+      attribute for a file the page generated and simply navigates to it, so
+      tapping Save opened the PDF in the browser instead of saving it. The
+      share sheet is the way out of a web page on iOS — "Save to Files" sits
+      in it — and it has to be opened by a tap, by the tap itself. So the file
+      is always built first and this only ever runs from a button. */
+  async function handOver(file) {
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], title: file.name });
+        return "shared";
+      } catch (e) {
+        if (e && e.name === "AbortError") return "cancelled";
+        // Anything else: fall through and try the link after all.
+      }
+    }
+    const url = URL.createObjectURL(file);
     const a = el("a");
     a.href = url;
-    a.download = filename;
+    a.download = file.name;
+    a.rel = "noopener";
     a.style.display = "none";
     document.body.appendChild(a);
     a.click();
@@ -1124,6 +1142,47 @@
     // Long enough for the browser to have taken the bytes; revoking too soon
     // cancels the save on some browsers.
     setTimeout(() => URL.revokeObjectURL(url), 20000);
+    return "downloaded";
+  }
+
+  const sizeOf = (n) =>
+    n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
+
+  /** The tap that turns a prepared file into a saved one. */
+  function offerSheet(file, opts = {}) {
+    return new Promise((resolve) => {
+      const scrim = el("div", "scrim");
+      const sheet = el("div", "sheet");
+      sheet.innerHTML =
+        "<h3>" + esc(file.name) + "</h3>" +
+        "<p>" + esc(sizeOf(file.size) + (opts.note ? " · " + opts.note : "")) + "</p>" +
+        "<p>Pick <b>Save to Files</b> when your phone asks where it should go.</p>";
+      const stack = el("div", "btnstack");
+      const go = el("button", "btn");
+      go.textContent = "Save this file";
+      go.onclick = async () => {
+        go.disabled = true;
+        let how = "failed";
+        try { how = await handOver(file); } catch (_) {}
+        scrim.remove();
+        resolve(how);
+      };
+      stack.appendChild(go);
+      if (opts.showSkip) {
+        const skip = el("button", "btn ghost");
+        skip.textContent = "Skip this one";
+        skip.onclick = () => { scrim.remove(); resolve("skipped"); };
+        stack.appendChild(skip);
+      }
+      const stop = el("button", "btn ghost");
+      stop.textContent = opts.showSkip ? "Stop saving" : "Cancel";
+      stop.onclick = () => { scrim.remove(); resolve("stop"); };
+      stack.appendChild(stop);
+      sheet.appendChild(stack);
+      scrim.appendChild(sheet);
+      document.body.appendChild(scrim);
+      go.focus();
+    });
   }
 
   const fileSafe = (s) =>
@@ -1133,16 +1192,14 @@
       was imported; an image book is packed into a CBZ, which is what it came
       from. Re-importing either one rebuilds the book exactly, so this is a
       real backup and not a copy in a format only this app understands. */
-  async function exportBook(b) {
+  async function buildBookFile(b) {
     const name = fileSafe(b.title);
     if (b.kind === "pdf") {
       const blob = await getBlob("pdf:" + b.id);
-      if (!blob) return false;
-      saveBlob(blob, name + ".pdf");
-      return true;
+      return blob ? new File([blob], name + ".pdf", { type: "application/pdf" }) : null;
     }
     const total = pageCount(b);
-    if (!total) return false;
+    if (!total) return null;
     const zip = new JSZip();
     let packed = 0;
     for (let i = 0; i < total; i++) {
@@ -1155,54 +1212,60 @@
         await new Promise((r) => setTimeout(r, 0));
       }
     }
-    if (!packed) return false;
+    setProgress(null);
+    if (!packed) return null;
     // STORE, not deflate: the pages are already compressed images, so
     // compressing again costs time and memory and saves nothing.
     const out = await zip.generateAsync({ type: "blob", compression: "STORE" });
-    saveBlob(out, name + ".cbz");
-    return true;
+    return new File([out], name + ".cbz", { type: "application/zip" });
   }
 
+  /* One book at a time, each one offered by its own tap. A loop that fired
+     fifty saves by itself would be nicer, but a phone will only put a file
+     away in answer to a tap, so this asks for one and lets you stop whenever. */
   async function exportEverything() {
     const pick = await choose({
       title: "Save every book",
-      body: "Each book is saved as its own file, so no single file has to hold your " +
-        "whole library — a PDF stays a PDF, pages become a CBZ. Your browser may ask " +
-        "about each one. " + books.length + (books.length === 1 ? " book" : " books") +
-        ", plus the details file.",
+      body: "Each book is saved as its own file — a PDF stays a PDF, pages become a CBZ — " +
+        "so no single file has to hold your whole library. Your phone asks where each one " +
+        "goes, and it will only ask in answer to a tap, so this goes one at a time: " +
+        books.length + (books.length === 1 ? " book" : " books") + ", plus the details " +
+        "file first. You can stop at any point and carry on later.",
       actions: [{ key: "go", label: "Start saving" }, { key: "no", label: "Cancel", ghost: true }],
     });
     if (pick !== "go") return;
 
-    state.busy = true; render();
-    exportDetails();
-    let done = 0;
+    const first = await offerSheet(detailsFile(), { note: "your tags and reading places" });
+    if (first === "stop") return;
+
+    let saved = 0, skipped = 0, stoppedAt = -1;
     const failed = [];
     for (let i = 0; i < books.length; i++) {
       const b = books[i];
-      setProgress("Saving " + (i + 1) + " of " + books.length + ": " + b.title);
-      try {
-        if (await exportBook(b)) done++;
-        else failed.push(b.title);
-      } catch (_) {
-        failed.push(b.title);
-      }
-      // Give the browser room to take each file before offering the next.
-      await new Promise((r) => setTimeout(r, 500));
+      setProgress("Preparing " + (i + 1) + " of " + books.length + ": " + b.title);
+      let file = null;
+      try { file = await buildBookFile(b); } catch (_) {}
+      setProgress(null);
+      if (!file) { failed.push(b.title); continue; }
+      const how = await offerSheet(file, { note: "book " + (i + 1) + " of " + books.length, showSkip: true });
+      if (how === "stop") { stoppedAt = i; break; }
+      if (how === "shared" || how === "downloaded") saved++;
+      else skipped++;
     }
     setProgress(null);
-    state.busy = false; render();
     await choose({
-      title: failed.length ? "Saved, with gaps" : "Saved",
-      body: (done === 1 ? "1 book saved." : done + " books saved.") +
-        (failed.length ? " " + failed.length + " could not be saved." : "") +
-        " Keep them together with the details file.",
-      names: failed.map((n) => n + " — could not be saved"),
+      title: failed.length ? "Saving finished, with gaps" : "Saving finished",
+      body: (saved === 1 ? "1 book saved." : saved + " books saved.") +
+        (skipped ? " " + skipped + " skipped." : "") +
+        (failed.length ? " " + failed.length + " could not be read back." : "") +
+        (stoppedAt >= 0 ? " Stopped at number " + (stoppedAt + 1) + " of " + books.length + "." : "") +
+        " Keep the files together with the details file.",
+      names: failed.map((n) => n + " — could not be read back"),
       actions: [{ key: "ok", label: "Done" }],
     });
   }
 
-  function exportDetails() {
+  function detailsFile() {
     const payload = {
       kind: "paper-shelf-library",
       version: 1,
@@ -1217,9 +1280,13 @@
         addedAt: b.addedAt || null,
       })),
     };
-    saveBlob(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }),
-      "paper-shelf-library.json");
-    toast("Saved as paper-shelf-library.json", 4000);
+    return new File([JSON.stringify(payload, null, 2)], "paper-shelf-library.json",
+      { type: "application/json" });
+  }
+
+  async function exportDetails() {
+    const how = await offerSheet(detailsFile(), { note: "your tags and reading places" });
+    if (how === "shared" || how === "downloaded") toast("Saved paper-shelf-library.json", 4000);
   }
 
   async function restoreDetails(file) {
@@ -1615,7 +1682,10 @@
     sv.onclick = async () => {
       sv.disabled = true;
       try {
-        if (!(await exportBook(b))) toast("This book's pages could not be read back");
+        const file = await buildBookFile(b);
+        if (!file) { toast("This book's pages could not be read back"); return; }
+        const how = await offerSheet(file);
+        if (how === "shared" || how === "downloaded") toast("Saved " + file.name, 4000);
       } catch (e) {
         toast(e.message || "Could not save that book");
       } finally {
