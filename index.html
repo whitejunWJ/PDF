@@ -479,7 +479,7 @@
   const IMG_EXT = /\.(jpe?g|png|gif|webp|bmp|avif)$/i;
   const $ = (s) => document.querySelector(s);
   const el = (t, c) => { const n = document.createElement(t); if (c) n.className = c; return n; };
-  const BUILD = "2026-10-29a";
+  const BUILD = "2026-11-01a";
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const nat = (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
   const uid = () => Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7);
@@ -1424,16 +1424,47 @@
   }
 
   /* ============ views ============ */
-  function render() {
+
+  /* Each list keeps its own place. A single shared scroll offset is what made
+     the shelf come back half way down after leaving a book — the number
+     belonged to the book screen, not to the shelf. */
+  const scrollMemory = { shelf: 0, queue: 0, settings: 0 };
+
+  /** Note where the list showing now had got to, before navigating off it. */
+  function rememberScroll() {
+    if (state.detail) return;            // a book screen always opens at its own top
+    const m = $("#main");
+    if (m) scrollMemory[state.tab] = m.scrollTop;
+  }
+
+  let renderSeq = 0;
+
+  /** Rebuilds the screen. Without an argument it holds the scroll position,
+      so acting on a book — tagging it, queueing it — does not throw you back
+      to the top. Pass a number to land somewhere specific. */
+  function render(scrollTo) {
+    const m = $("#main");
+    const keep = scrollTo === undefined ? (m ? m.scrollTop : 0) : scrollTo;
+    const my = ++renderSeq;
+
     const v = $("#view");
     v.innerHTML = "";
     $("#tabs").querySelectorAll("button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === state.tab && !state.detail)));
     $("#addBtn").hidden = !!state.detail || state.tab === "settings";
 
-    if (state.detail) return viewDetail(v);
-    if (state.tab === "shelf") return viewShelf(v);
-    if (state.tab === "queue") return viewQueue(v);
-    return viewSettings(v);
+    if (state.detail) viewDetail(v);
+    else if (state.tab === "shelf") viewShelf(v);
+    else if (state.tab === "queue") viewQueue(v);
+    else viewSettings(v);
+
+    // viewDetail can bail out and render again; that nested pass owns the
+    // scroll position, so this one must not fight it.
+    if (my !== renderSeq || !m) return;
+    m.scrollTop = keep;
+    // Covers reserve their space with a fixed aspect ratio, so the height is
+    // already right — but a second pass after layout costs nothing and covers
+    // the first draw after a cold start.
+    setTimeout(() => { if (my === renderSeq) m.scrollTop = keep; }, 0);
   }
 
   function viewShelf(v) {
@@ -1539,7 +1570,7 @@
     const n = pageCount(b);
     s.textContent = b.lastPage > 0 && n ? "Page " + (b.lastPage + 1) + " of " + n : n ? n + " pages" : "—";
     card.append(t, s);
-    card.onclick = () => { state.detail = b.id; render(); $("#main").scrollTop = 0; };
+    card.onclick = () => { rememberScroll(); state.detail = b.id; render(0); };
     cardCache.set(b.id, card);
     return card;
   }
@@ -1573,7 +1604,7 @@
       const total = pageCount(b);
       d.innerHTML = "<b>" + esc(b.title) + "</b><small>" +
         (b.lastPage > 0 && total ? "Page " + (b.lastPage + 1) + " of " + total : total ? total + " pages" : "—") + "</small>";
-      d.onclick = () => { state.detail = b.id; render(); };
+      d.onclick = () => { rememberScroll(); state.detail = b.id; render(0); };
       cov.onclick = d.onclick;
 
       const ctl = el("div", "qctl");
@@ -1605,12 +1636,10 @@
     render();
   }
 
-  /** Leaving a book always lands at the top of the shelf. Without this the
-      scroller keeps whatever offset the book screen was left at. */
+  /** Leaving a book puts the shelf back exactly where you left it. */
   function closeDetail() {
     state.detail = null;
-    render();
-    $("#main").scrollTop = 0;
+    render(scrollMemory[state.tab] || 0);
   }
 
   function viewDetail(v) {
@@ -2142,16 +2171,18 @@
     if (R.node) R.node.remove();
     R.node = null;
     R.token++;
-    getBooks().then((bs) => { books = bs; render(); });
+    // reloadBooks, not getBooks: the shelf cards are cached, so without
+    // clearing them the page you just reached would not show on the cover.
+    reloadBooks().then(() => render());
   }
 
   /* ============ tabs ============ */
   $("#tabs").querySelectorAll("button").forEach((btn) => {
     btn.onclick = () => {
+      rememberScroll();
       state.tab = btn.dataset.tab;
       state.detail = null;
-      render();
-      $("#main").scrollTop = 0;
+      render(scrollMemory[state.tab] || 0);
     };
   });
 
